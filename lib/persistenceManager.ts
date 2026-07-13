@@ -304,7 +304,7 @@ async function readTopics(userId: string): Promise<Result> {
 async function readHistory(userId: string): Promise<Result> {
   const { data, error } = await supabase
     .from("matches")
-    .select("*, match_rounds(*), debots(name, color, sym)")
+    .select("*, match_rounds(*), debots(name, color)")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
   if (error) return { ok: false, source: "db", error };

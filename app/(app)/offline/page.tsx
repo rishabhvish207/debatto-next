@@ -19,7 +19,6 @@ import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 /* ═══════════════════════════════════════════════════════════
    STATIC DATA & UTILS
 ═══════════════════════════════════════════════════════════ */
-const ROUND_OPTIONS = GAME_CONFIG.rounds.options;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 function extractJSON(raw) {
@@ -39,6 +38,7 @@ export default function OfflinePage() {
     profile, upProfile,
     opps, oppsLoading, unlockDebot,
     topics, topicsLoading, saveCustomTopic,
+    roundOptions, defaultRounds,
     apiError, setApiError,
   } = useGame();
 
@@ -52,8 +52,18 @@ export default function OfflinePage() {
   const [customT, setCustomT] = useState("");
   const [useCustom, setUseCustom] = useState(false);
   const [topicSearch, setTopicSearch] = useState("");
-  const [rounds, setRounds] = useState(GAME_CONFIG.rounds.default);
+  const [rounds, setRounds] = useState(defaultRounds);
   const [savingTopic, setSavingTopic] = useState(false);
+  const [aiSearching, setAiSearching] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState(null);
+  const [savedSuggestionIdx, setSavedSuggestionIdx] = useState([]);
+
+  // defaultRounds starts as the GAME_CONFIG fallback and updates once
+  // GameContext's app_settings fetch resolves — keep in sync in case that
+  // happens after this page has already mounted.
+  useEffect(() => {
+    setRounds(defaultRounds);
+  }, [defaultRounds]);
 
   // Battle State
   const [round, setRound] = useState(1);
@@ -156,6 +166,35 @@ export default function OfflinePage() {
     if (ok) { setCustomT(""); setUseCustom(false); }
   }
 
+  // ── AI TOPIC SEARCH ──
+  // Note: this asks the model to generate plausible debate topics related to
+  // the search text from its own knowledge — the app has no live web-search
+  // tool wired up, so these are AI-suggested, not literally freshly scraped
+  // from the internet.
+  async function searchTopicsWithAI() {
+    const query = topicSearch.trim();
+    if (!query || aiSearching) return;
+    setAiSearching(true);
+    setAiSuggestions(null);
+    setSavedSuggestionIdx([]);
+    const sys = `You are a debate topic curator. Given a keyword or partial sentence, suggest 5 sharp, debatable propositions related to it. Return ONLY JSON:
+{"topics":[{"text":"proposition as a clear statement","cat":"short category label"}]}`;
+    try {
+      const raw = await callAI(sys, `Keyword/phrase: "${query}"`);
+      const parsed = JSON.parse(extractJSON(raw));
+      setAiSuggestions(Array.isArray(parsed.topics) ? parsed.topics : []);
+    } catch (err) {
+      console.error(err);
+      setApiError("AI topic search failed. Please try again.");
+    }
+    setAiSearching(false);
+  }
+
+  async function saveSuggestion(suggestion, idx) {
+    const ok = await saveCustomTopic(suggestion.text, suggestion.cat || "Custom");
+    if (ok) setSavedSuggestionIdx(prev => [...prev, idx]);
+  }
+
   // ── EMOTIONAL CONTEXT GENERATOR ──
   function getEmotionalContext(currentOPts, currentPPts) {
     const diff = currentOPts - currentPPts;
@@ -177,8 +216,9 @@ export default function OfflinePage() {
 
     try {
       const sys = `You are ${opp.name} debating ${oppSide} the proposition: "${activeTopic.text}". 
-Personality: ${opp.personality} | Argument Depth: ${opp.depth} | Relationship to Player: ${opp.relationship}
-BEHAVIOR RULES: Speak like a real human. Show personality. Give a sharp 2-3 sentence opening argument in-character. Return ONLY the argument text.`;
+Personality: ${opp.personality} | Argument Depth: ${opp.depth}
+BACKGROUND STORY: ${opp.story}
+BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not every time) let a line of your argument be colored by your background story — a hint of your past, your present situation, or what you're working toward — without turning the debate into a monologue about yourself. Give a sharp 2-3 sentence opening argument in-character. Return ONLY the argument text.`;
       
       const text = await callAI(sys, "State your opening argument.");
       setOppArg(text);
@@ -203,7 +243,8 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Give a sharp 2-3 sent
 
     const sys = `You are both ${opp.name} and an impartial debate judge.
 TOPIC: "${activeTopic.text}" | OPPONENT SIDE: ${oppSide} | PLAYER (${profile.name}): ${curSide} | ROUND: ${round}/${rounds}
-DEBOT PERSONALITY: ${opp.personality} | ARGUMENT DEPTH: ${opp.depth} | RELATIONSHIP TO PLAYER: ${opp.relationship}
+DEBOT PERSONALITY: ${opp.personality} | ARGUMENT DEPTH: ${opp.depth}
+DEBOT BACKGROUND STORY: ${opp.story} (occasionally, not every round, let a hint of past/present/what-they're-working-toward color the opponent_reply)
 EMOTIONAL CONTEXT: ${emotionalState}
 OPPONENT SAID: "${oppArg}"
 PLAYER SAID: "${input}"
@@ -381,17 +422,52 @@ Return ONLY valid JSON:
         )}
 
         {/* ── Rounds & Topic ── */}
-        <div style={{ fontSize: 12, color: "var(--muted)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>Settings</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>Number of Rounds</div>
         <div style={{ display: "flex", gap: 9, marginBottom: 26, flexWrap: "wrap" }}>
-          {ROUND_OPTIONS.map(r => (
+          {roundOptions.map(r => (
             <button key={r} className={`btn ${rounds === r ? "btn-primary" : "btn-ghost"}`} onClick={() => setRounds(r)}>{r} Rounds</button>
           ))}
         </div>
 
-        <div style={{ position: "relative", marginBottom: 10 }}>
-          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 14 }}>⌕</span>
-          <input className="search-input" placeholder="Search topics by keyword…" value={topicSearch} onChange={e => setTopicSearch(e.target.value)} />
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <div style={{ position: "relative", flex: 1 }}>
+            <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 14 }}>⌕</span>
+            <input className="search-input" placeholder="Search topics by keyword…" value={topicSearch} onChange={e => setTopicSearch(e.target.value)} />
+          </div>
+          <button
+            className="btn btn-ghost btn-sm"
+            disabled={!topicSearch.trim() || aiSearching}
+            onClick={searchTopicsWithAI}
+            title="Ask AI to suggest debate topics related to this search"
+          >
+            {aiSearching ? "Searching…" : "✦ Search AI"}
+          </button>
         </div>
+
+        {aiSuggestions && (
+          <div className="card anim-fade-up" style={{ padding: 12, marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: "var(--blue)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
+              ✦ AI Suggestions
+            </div>
+            {aiSuggestions.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>No suggestions came back — try a different phrase.</div>
+            ) : aiSuggestions.map((s, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13 }}>{s.text}</div>
+                  <div style={{ fontSize: 10, color: "var(--muted)" }}>{s.cat}</div>
+                </div>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  disabled={savedSuggestionIdx.includes(i)}
+                  onClick={() => saveSuggestion(s, i)}
+                >
+                  {savedSuggestionIdx.includes(i) ? "Saved ✓" : "💾 Save"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 10, maxHeight: 240, overflowY: "auto" }}>
           {topicsLoading ? (

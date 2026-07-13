@@ -43,7 +43,6 @@ export default function HistoryPage() {
         id: m.id,
         debotName: debot?.name || "Unknown Debot",
         debotColor: debot?.color || "var(--muted)",
-        debotSym: debot?.sym || "●",
         topicText: m.topicText,
         result: m.result,
         playerScore: m.playerScore,
@@ -63,7 +62,6 @@ export default function HistoryPage() {
       id: m.id,
       debotName: m.debots?.name || "Unknown Debot",
       debotColor: m.debots?.color || "var(--muted)",
-      debotSym: m.debots?.sym || "●",
       topicText: m.topic_text,
       result: m.result,
       playerScore: m.player_score,
@@ -104,7 +102,12 @@ export default function HistoryPage() {
                   style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
                   onClick={() => setExpandedMatchId(expanded ? null : m.id)}
                 >
-                  <span style={{ fontSize: 18, color: m.debotColor }}>{m.debotSym}</span>
+                  <span style={{
+                    width: 26, height: 26, borderRadius: 7, flexShrink: 0,
+                    background: `${m.debotColor}20`, color: m.debotColor,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 12, fontWeight: 700,
+                  }}>{m.debotName?.[0]?.toUpperCase() || "?"}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       vs {m.debotName}

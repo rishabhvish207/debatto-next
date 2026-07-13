@@ -45,7 +45,10 @@ type GameContextValue = {
 
   topics: any[];
   topicsLoading: boolean;
-  saveCustomTopic: (text: string) => Promise<boolean>;
+  saveCustomTopic: (text: string, cat?: string) => Promise<boolean>;
+
+  roundOptions: number[];
+  defaultRounds: number;
 
   apiError: string;
   setApiError: (msg: string) => void;
@@ -73,6 +76,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   const [topics, setTopics] = useState<any[]>([]);
   const [topicsLoading, setTopicsLoading] = useState(true);
+
+  const [roundOptions, setRoundOptions] = useState<number[]>(GAME_CONFIG.rounds.options);
+  const [defaultRounds, setDefaultRounds] = useState<number>(GAME_CONFIG.rounds.default);
 
   const [apiError, setApiError] = useState("");
 
@@ -173,7 +179,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
         color: d.color || "var(--blue)",
         personality: d.personality || "Neutral, composed.",
         depth: d.depth || "Moderate",
-        relationship: d.relationship || "Neutral",
+        story: d.story || "No story written yet.",
+        vertices: d.vertices ?? 6,
+        sprite: d.sprite_url || null,
+        spriteEmotions: d.sprite_emotions || {},
         multiplier: d.multiplier ?? GAME_CONFIG.damage.playerMultiplier,
         reward: d.reward ?? 5,
         unlocked: (d.cost ?? 0) <= 0 || unlockedIds.includes(d.id),
@@ -203,6 +212,29 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setApiError("Failed to unlock debot. Please try again.");
     }
   }
+
+  // ── GAME SETTINGS: admin-configurable round options ──
+  useEffect(() => {
+    const fetchRoundSettings = async () => {
+      const { data, error } = await supabase
+        .from("app_settings")
+        .select("key, value")
+        .in("key", ["rounds_options", "rounds_default"]);
+
+      if (error || !data) return; // keep the GAME_CONFIG fallback silently
+
+      const map: Record<string, any> = {};
+      for (const row of data) map[row.key] = row.value;
+
+      if (Array.isArray(map.rounds_options) && map.rounds_options.length) {
+        setRoundOptions(map.rounds_options);
+      }
+      if (typeof map.rounds_default === "number") {
+        setDefaultRounds(map.rounds_default);
+      }
+    };
+    fetchRoundSettings();
+  }, []);
 
   // ── TOPICS: system (public) + per-user/guest custom ──
   useEffect(() => {
@@ -240,7 +272,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     fetchTopics();
   }, [user]);
 
-  async function saveCustomTopic(text: string): Promise<boolean> {
+  async function saveCustomTopic(text: string, cat: string = "Custom"): Promise<boolean> {
     const trimmed = text.trim();
     if (!trimmed || savingTopicRef.current) return false;
     savingTopicRef.current = true;
@@ -248,7 +280,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const newTopic = {
       id: user ? undefined : `local-${Date.now()}`,
       text: trimmed,
-      cat: "Custom",
+      cat,
       is_system: false,
     };
 
@@ -271,7 +303,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         .limit(1);
       const row = data?.[0];
       if (row) {
-        setTopics((prev) => [...prev, { ...row, text: row.title || trimmed, cat: row.category || "Custom" }]);
+        setTopics((prev) => [...prev, { ...row, text: row.title || trimmed, cat: row.category || cat }]);
       }
     } else {
       setTopics((prev) => [...prev, newTopic]);
@@ -294,6 +326,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         topics,
         topicsLoading,
         saveCustomTopic,
+        roundOptions,
+        defaultRounds,
         apiError,
         setApiError,
       }}

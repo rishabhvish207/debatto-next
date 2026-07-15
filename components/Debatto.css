@@ -125,3 +125,10 @@ body{background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
   animation:spin .7s linear infinite;
 }
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* ═══════════ CONFIRM MODAL (centered, replaces native confirm()/alert()) ═══════════ */
+.confirm-modal{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:62;
+  width:320px;max-width:88vw;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--r);padding:20px;animation:fadeIn .15s ease;
+}

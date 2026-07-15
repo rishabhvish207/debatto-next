@@ -17,12 +17,17 @@ export type AuthUser = { id: string } | null;
 
 type Domain = "profile" | "debots" | "topics" | "history";
 
+const PINNED_TOPICS_LOCAL_KEY = "debatto:pinned_topics"; // string[] of topic ids, guest-only
+const HIDDEN_TOPICS_LOCAL_KEY = "debatto:hidden_topics"; // string[] of system-topic ids this guest has personally removed
+
 const LOCAL_KEYS: Record<Domain, string> = {
   profile: "debatto:profile",
   debots: "debatto:unlocked_debots",   // string[] of debot ids the guest owns
   topics: "debatto:custom_topics",     // array of custom topic objects
   history: "debatto:match_history",    // array of { debotId, topicText, result, playerScore, opponentScore, rounds }
 };
+
+
 
 // ---------------------------------------------------------------------------
 // Low-level localStorage helpers (guest path)
@@ -309,4 +314,96 @@ async function readHistory(userId: string): Promise<Result> {
     .order("created_at", { ascending: false });
   if (error) return { ok: false, source: "db", error };
   return { ok: true, source: "db", data };
+}
+
+// ---------------------------------------------------------------------------
+// Topic pinning — a per-user preference layered on top of any topic (system
+// or their own custom one). Kept as dedicated functions rather than forced
+// into the generic saveGameData/loadGameData domain switch above, since
+// toggle-on/toggle-off doesn't fit that "write this value" shape cleanly.
+// ---------------------------------------------------------------------------
+
+export async function loadPinnedTopics(user: AuthUser): Promise<Result> {
+  if (!user) {
+    return { ok: true, source: "local", data: readLocal<string[]>(PINNED_TOPICS_LOCAL_KEY, []) };
+  }
+  const { data, error } = await supabase.from("pinned_topics").select("topic_id").eq("user_id", user.id);
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db", data: (data || []).map((r: any) => r.topic_id) };
+}
+
+export async function loadHiddenTopics(user: AuthUser): Promise<Result> {
+  if (!user) {
+    return { ok: true, source: "local", data: readLocal<string[]>(HIDDEN_TOPICS_LOCAL_KEY, []) };
+  }
+  const { data, error } = await supabase.from("hidden_topics").select("topic_id").eq("user_id", user.id);
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db", data: (data || []).map((r: any) => r.topic_id) };
+}
+
+async function hideSystemTopicForUser(topicId: any, user: AuthUser): Promise<Result> {
+  if (!user) {
+    const existing = readLocal<string[]>(HIDDEN_TOPICS_LOCAL_KEY, []);
+    writeLocal(HIDDEN_TOPICS_LOCAL_KEY, existing.includes(topicId) ? existing : [...existing, topicId]);
+    return { ok: true, source: "local" };
+  }
+  const { error } = await supabase.from("hidden_topics").upsert(
+    { user_id: user.id, topic_id: topicId },
+    { onConflict: "user_id,topic_id" }
+  );
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db" };
+}
+
+/**
+ * "Delete" on a system topic can't remove it for everyone, so it's really a
+ * per-user hide (a row in hidden_topics / a local id list). A user's own
+ * custom topic (is_system === false) gets a real delete instead.
+ */
+export async function deleteTopic(topic: { id: any; is_system?: boolean }, user: AuthUser): Promise<Result> {
+  const topicId = topic.id;
+
+  if (topic.is_system) {
+    return hideSystemTopicForUser(topicId, user);
+  }
+
+  if (!user) {
+    const existing = readLocal<any[]>(LOCAL_KEYS.topics, []);
+    writeLocal(LOCAL_KEYS.topics, existing.filter((t: any) => t.id !== topicId));
+    const pinned = readLocal<string[]>(PINNED_TOPICS_LOCAL_KEY, []);
+    writeLocal(PINNED_TOPICS_LOCAL_KEY, pinned.filter((id) => id !== topicId));
+    return { ok: true, source: "local" };
+  }
+
+  const { error } = await supabase
+    .from("topics")
+    .delete()
+    .eq("id", topicId)
+    .eq("user_id", user.id)
+    .eq("is_system", false);
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db" };
+}
+
+export async function togglePinnedTopic(topicId: any, shouldBePinned: boolean, user: AuthUser): Promise<Result> {
+  if (!user) {
+    const existing = readLocal<string[]>(PINNED_TOPICS_LOCAL_KEY, []);
+    const next = shouldBePinned
+      ? (existing.includes(topicId) ? existing : [...existing, topicId])
+      : existing.filter((id) => id !== topicId);
+    writeLocal(PINNED_TOPICS_LOCAL_KEY, next);
+    return { ok: true, source: "local" };
+  }
+
+  if (shouldBePinned) {
+    const { error } = await supabase.from("pinned_topics").upsert(
+      { user_id: user.id, topic_id: topicId },
+      { onConflict: "user_id,topic_id" }
+    );
+    if (error) return { ok: false, source: "db", error };
+  } else {
+    const { error } = await supabase.from("pinned_topics").delete().eq("user_id", user.id).eq("topic_id", topicId);
+    if (error) return { ok: false, source: "db", error };
+  }
+  return { ok: true, source: "db" };
 }

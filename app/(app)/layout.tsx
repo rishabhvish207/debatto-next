@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { TopBar } from "@/components/shell/TopBar";
 import { RightDrawer } from "@/components/shell/RightDrawer";
-import { BackButton } from "@/components/shell/BackButton";
 
 export default function AppGroupLayout({ children }: { children: React.ReactNode }) {
   const { apiError, setApiError } = useGame();
@@ -13,7 +12,6 @@ export default function AppGroupLayout({ children }: { children: React.ReactNode
   return (
     <div>
       <TopBar onOpenDrawer={() => setDrawerOpen(true)} />
-      <BackButton />
       {drawerOpen && <RightDrawer onClose={() => setDrawerOpen(false)} />}
 
       {apiError && (

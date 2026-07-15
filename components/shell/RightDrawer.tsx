@@ -34,6 +34,9 @@ export function RightDrawer({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
+        <Link href="/profile" className="drawer-item" onClick={onClose}>
+          <span style={{ width: 20, textAlign: "center" }}>👤</span> Profile
+        </Link>
         <Link href="/history" className="drawer-item" onClick={onClose}>
           <span style={{ width: 20, textAlign: "center" }}>📜</span> Match History
         </Link>

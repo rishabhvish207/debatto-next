@@ -9,10 +9,10 @@ import { AdvBar } from "@/components/ui/AdvBar";
 import { PlayerSprite } from "@/components/ui/PlayerSprite";
 import { DebotSprite } from "@/components/ui/DebotSprite";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
-import ProfileModal from "@/components/modals/ProfileModal";
 import { DebotStage } from "@/components/arena/DebotStage";
 import { DialogueBox } from "@/components/game/DialogueBox";
 import { InputPanel } from "@/components/game/InputPanel";
+import { ConfirmModal } from "@/components/shell/ConfirmModal";
 import { GAME_CONFIG } from "@/config/Game";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 
@@ -36,14 +36,15 @@ export default function OfflinePage() {
   const {
     user,
     profile, upProfile,
+    battleActive, setBattleActive,
     opps, oppsLoading, unlockDebot,
     topics, topicsLoading, saveCustomTopic,
-    roundOptions, defaultRounds,
+    pinnedTopicIds, toggleTopicPin, deleteTopic,
+    roundOptions, defaultRounds, cheatTapEnabled,
     apiError, setApiError,
   } = useGame();
 
   const [page, setPage] = useState("setup");
-  const [showProfile, setShowProfile] = useState(false);
 
   // Setup State
   const [opp, setOpp] = useState(null);
@@ -54,9 +55,12 @@ export default function OfflinePage() {
   const [topicSearch, setTopicSearch] = useState("");
   const [rounds, setRounds] = useState(defaultRounds);
   const [savingTopic, setSavingTopic] = useState(false);
+  const [confirmingExit, setConfirmingExit] = useState(false);
   const [aiSearching, setAiSearching] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState(null);
   const [savedSuggestionIdx, setSavedSuggestionIdx] = useState([]);
+  const [topicMenuOpenId, setTopicMenuOpenId] = useState(null);
+  const [topicDeleteConfirmId, setTopicDeleteConfirmId] = useState(null);
 
   // defaultRounds starts as the GAME_CONFIG fallback and updates once
   // GameContext's app_settings fetch resolves — keep in sync in case that
@@ -100,6 +104,7 @@ export default function OfflinePage() {
   const coinTapTimerRef = useRef(null);
 
   function handleCoinTap() {
+    if (!cheatTapEnabled) return;
     coinTapCountRef.current += 1;
     if (coinTapTimerRef.current) clearTimeout(coinTapTimerRef.current);
     coinTapTimerRef.current = setTimeout(() => { coinTapCountRef.current = 0; }, 800);
@@ -143,7 +148,20 @@ export default function OfflinePage() {
     });
   }, [page]);
 
+  // Keep the shared "is a match in progress" flag in sync — the global
+  // BackButton reads this to decide whether to intercept navigation with a
+  // confirm modal. Also clear it on unmount so it can't get stuck true.
+  useEffect(() => {
+    setBattleActive(page === "battle");
+    return () => setBattleActive(false);
+  }, [page]);
+
   // Derived
+  const visibleTopics = topics
+    .filter(t => t.text.toLowerCase().includes(topicSearch.toLowerCase()) || t.cat.toLowerCase().includes(topicSearch.toLowerCase()))
+    .slice()
+    .sort((a, b) => (pinnedTopicIds.includes(b.id) ? 1 : 0) - (pinnedTopicIds.includes(a.id) ? 1 : 0));
+
   const activeTopic = useCustom && customT.trim() ? { text: customT.trim(), cat: "Custom" } : topic;
   const playerSide = topicSide;
   const oppSide = playerSide === "FOR" ? "AGAINST" : "FOR";
@@ -215,10 +233,11 @@ export default function OfflinePage() {
     setPhase("loading"); setLoadMsg("Preparing opening argument…");
 
     try {
+      const n = opp.argSentences ?? 3;
       const sys = `You are ${opp.name} debating ${oppSide} the proposition: "${activeTopic.text}". 
 Personality: ${opp.personality} | Argument Depth: ${opp.depth}
 BACKGROUND STORY: ${opp.story}
-BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not every time) let a line of your argument be colored by your background story — a hint of your past, your present situation, or what you're working toward — without turning the debate into a monologue about yourself. Give a sharp 2-3 sentence opening argument in-character. Return ONLY the argument text.`;
+BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not every time) let a line of your argument be colored by your background story — a hint of your past, your present situation, or what you're working toward — without turning the debate into a monologue about yourself. Give a sharp ${n}-sentence opening argument in-character. Return ONLY the argument text.`;
       
       const text = await callAI(sys, "State your opening argument.");
       setOppArg(text);
@@ -259,7 +278,7 @@ JUDGE RULES:
 
 Return ONLY valid JSON:
 {
-  "opponent_reply": "${isLast ? "Closing statement (2 sentences)" : "Next in-character argument (2-3 sentences)"}",
+  "opponent_reply": "${isLast ? "Closing statement (2 sentences)" : `Next in-character argument (${opp.argSentences ?? 3} sentences)`}",
   "gain": 0-50,
   "penalty": 0-30,
   "tags": ["Style","Depth","Quality"],
@@ -398,11 +417,9 @@ Return ONLY valid JSON:
           filter: "blur(80px)", zIndex: -1, pointerEvents: "none", transition: "background 0.8s ease"
         }} />
 
-        {showProfile && <ProfileModal profile={profile} onSave={name => { upProfile({ name }); setShowProfile(false); }} onClose={() => setShowProfile(false)} />}
-
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
           <div style={{ flex: 1 }} />
-          <button className="btn btn-ghost btn-sm" onClick={() => setShowProfile(true)} style={{ fontSize: 12, color: "var(--muted)" }}>{profile.name}</button>
+          <button className="btn btn-ghost btn-sm" style={{ fontSize: 12, color: "var(--muted)", cursor: "default" }}>{profile.name}</button>
           <span className="badge" onClick={handleCoinTap} style={{ background: "var(--amber-soft)", color: "var(--amber)" }}><DebucksIcon style={{ marginRight: 4 }} />{profile.coins}</span>
         </div>
 
@@ -446,8 +463,17 @@ Return ONLY valid JSON:
 
         {aiSuggestions && (
           <div className="card anim-fade-up" style={{ padding: 12, marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: "var(--blue)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
-              ✦ AI Suggestions
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ fontSize: 11, color: "var(--blue)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                ✦ AI Suggestions
+              </div>
+              <button
+                onClick={() => setAiSuggestions(null)}
+                title="Close"
+                style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", fontSize: 14, lineHeight: 1, color: "var(--muted)" }}
+              >
+                ✕
+              </button>
             </div>
             {aiSuggestions.length === 0 ? (
               <div style={{ fontSize: 12, color: "var(--muted)" }}>No suggestions came back — try a different phrase.</div>
@@ -469,23 +495,109 @@ Return ONLY valid JSON:
           </div>
         )}
 
+        {topicMenuOpenId && (
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 15 }}
+            onClick={() => { setTopicMenuOpenId(null); setTopicDeleteConfirmId(null); }}
+          />
+        )}
+
         <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 10, maxHeight: 240, overflowY: "auto" }}>
           {topicsLoading ? (
             <p style={{ color: "var(--muted)", fontSize: 13 }}>Loading topics…</p>
-          ) : topics.filter(t => t.text.toLowerCase().includes(topicSearch.toLowerCase()) || t.cat.toLowerCase().includes(topicSearch.toLowerCase())).map(t => {
+          ) : visibleTopics.map((t, i) => {
             const sel = !useCustom && topic?.id === t.id;
+            const pinned = pinnedTopicIds.includes(t.id);
+            const prevPinned = i > 0 && pinnedTopicIds.includes(visibleTopics[i - 1].id);
+            const showDivider = i > 0 && prevPinned && !pinned;
+            const menuOpen = topicMenuOpenId === t.id;
+            const confirmingDelete = topicDeleteConfirmId === t.id;
+
             return (
-              <div key={t.id} className="card" style={{ padding: "11px 14px", borderColor: sel ? "var(--blue)" : "var(--border)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", marginBottom: sel ? 10 : 0 }} onClick={() => { setTopic(t); setUseCustom(false); }}>
-                  <span style={{ fontSize: 14, color: sel ? "var(--blue)" : "var(--text)" }}>{t.text}</span>
-                  <span className="badge" style={{ background: "var(--faint)", color: "var(--muted)", fontSize: 10 }}>{t.cat}</span>
-                </div>
-                {sel && (
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", animation: "fadeIn 0.2s" }}>
-                    <button className={`btn btn-sm ${topicSide === "FOR" ? "btn-primary" : "btn-ghost"}`} onClick={e => { e.stopPropagation(); setTopicSide("FOR"); }}>▲ For</button>
-                    <button className={`btn btn-sm ${topicSide === "AGAINST" ? "btn-danger" : "btn-ghost"}`} onClick={e => { e.stopPropagation(); setTopicSide("AGAINST"); }}>▼ Against</button>
-                  </div>
+              <div key={t.id}>
+                {showDivider && (
+                  <div style={{ height: 1, background: "var(--border)", opacity: 0.6, margin: "3px 10px" }} />
                 )}
+                <div className="card" style={{ padding: "11px 14px", borderColor: sel ? "var(--blue)" : "var(--border)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, cursor: "pointer", marginBottom: sel ? 10 : 0 }} onClick={() => { setTopic(t); setUseCustom(false); }}>
+                    <span style={{ fontSize: 14, color: sel ? "var(--blue)" : "var(--text)", flex: 1, minWidth: 0 }}>{t.text}</span>
+                    {pinned && (
+                      <span style={{ fontSize: 9, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", flexShrink: 0 }}>Pinned</span>
+                    )}
+                    <span className="badge" style={{ background: "var(--faint)", color: "var(--muted)", fontSize: 10, flexShrink: 0 }}>{t.cat}</span>
+
+                    <div style={{ position: "relative", flexShrink: 0 }}>
+                      <button
+                        onClick={e => { e.stopPropagation(); setTopicDeleteConfirmId(null); setTopicMenuOpenId(menuOpen ? null : t.id); }}
+                        title="Options"
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", fontSize: 15, lineHeight: 1, color: "var(--muted)" }}
+                      >
+                        ⋮
+                      </button>
+
+                      {menuOpen && (
+                        <div
+                          onClick={e => e.stopPropagation()}
+                          style={{
+                            position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 20,
+                            background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 8,
+                            minWidth: 150, overflow: "hidden", boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
+                          }}
+                        >
+                          {!confirmingDelete ? (
+                            <>
+                              <button
+                                onClick={() => { toggleTopicPin(t.id); setTopicMenuOpenId(null); }}
+                                style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", cursor: "pointer", fontSize: 12.5, color: "var(--text)" }}
+                              >
+                                {pinned ? "Unpin" : "Pin"}
+                              </button>
+                              <button
+                                onClick={() => setTopicDeleteConfirmId(t.id)}
+                                style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 12px", background: "none", border: "none", borderTop: "1px solid var(--border)", cursor: "pointer", fontSize: 12.5, color: "var(--red)" }}
+                              >
+                                {t.is_system ? "Remove from my list" : "Delete topic"}
+                              </button>
+                            </>
+                          ) : (
+                            <div style={{ padding: "9px 12px" }}>
+                              <div style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 8 }}>
+                                {t.is_system ? "Remove this topic from your list?" : "Delete this topic?"}
+                              </div>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  style={{ flex: 1, fontSize: 11.5 }}
+                                  onClick={() => setTopicDeleteConfirmId(null)}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  className="btn btn-danger btn-sm"
+                                  style={{ flex: 1, fontSize: 11.5 }}
+                                  onClick={async () => {
+                                    if (sel) { setTopic(null); }
+                                    setTopicMenuOpenId(null);
+                                    setTopicDeleteConfirmId(null);
+                                    await deleteTopic(t);
+                                  }}
+                                >
+                                  {t.is_system ? "Remove" : "Delete"}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {sel && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", animation: "fadeIn 0.2s" }}>
+                      <button className={`btn btn-sm ${topicSide === "FOR" ? "btn-primary" : "btn-ghost"}`} onClick={e => { e.stopPropagation(); setTopicSide("FOR"); }}>▲ For</button>
+                      <button className={`btn btn-sm ${topicSide === "AGAINST" ? "btn-danger" : "btn-ghost"}`} onClick={e => { e.stopPropagation(); setTopicSide("AGAINST"); }}>▼ Against</button>
+                    </div>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -535,7 +647,7 @@ Return ONLY valid JSON:
 
         <div className="card" style={{ padding: "10px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 7 }}>
-            <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }} onClick={() => setPage("setup")}>← Exit</button>
+            <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }} onClick={() => setConfirmingExit(true)}>← Exit</button>
             <div style={{ fontSize: 12, color: "var(--muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{activeTopic?.text}"</div>
             <span className="badge" style={{ background: "var(--faint)", color: "var(--muted)" }}>R {round}/{rounds}</span>
             <span className="badge" onClick={handleCoinTap} style={{ background: "var(--amber-soft)", color: "var(--amber)" }}><DebucksIcon style={{ marginRight: 4 }} />{profile.coins}</span>
@@ -564,7 +676,7 @@ Return ONLY valid JSON:
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{profile.name}</span>
-                    <span>{Math.round(pHP)}%</span>
+                    <span>{Math.round(pHP)}/100</span>
                   </div>
                   <HPBar current={pHP} max={100} color="var(--blue)" />
                 </div>
@@ -586,7 +698,7 @@ Return ONLY valid JSON:
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{opp?.name}</span>
-                    <span>{Math.round(clamp((oHP / (opp?.maxHP || 100)) * 100, 0, 100))}%</span>
+                    <span>{Math.round(clamp(oHP, 0, opp?.maxHP || 100))}/{opp?.maxHP || 100}</span>
                   </div>
                   <HPBar current={oHP} max={opp?.maxHP || 100} color={opp?.color || "var(--red)"} />
                 </div>
@@ -677,6 +789,17 @@ Return ONLY valid JSON:
             onAns={getAns}
             ansCost={ansCost}
             coins={profile.coins}
+          />
+        )}
+
+        {confirmingExit && (
+          <ConfirmModal
+            title="Exit this match?"
+            message="Leaving now will end the debate and lose your progress in this round."
+            confirmLabel="Exit anyway"
+            cancelLabel="Stay"
+            onConfirm={() => { setConfirmingExit(false); setPage("setup"); }}
+            onCancel={() => setConfirmingExit(false)}
           />
         )}
       </div>

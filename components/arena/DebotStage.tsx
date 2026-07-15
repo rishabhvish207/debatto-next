@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { DebucksIcon } from "../ui/DebucksIcon";
+import { useGame } from "@/contexts/GameContext";
 
 const OPP_HEX: Record<number, string> = {
   1:"#5dbb8a",2:"#2dd4bf",3:"#6b9fff",4:"#a78bfa",5:"#f5a623",6:"#38bdf8",
@@ -20,14 +21,15 @@ function polygonPts(sides: number, cx: number, cy: number, r: number): string {
 
 // Shape + optional sprite image, clipped to the debot's admin-configured
 // vertex count (0/1/2 -> circle, 3-10 -> that many-sided polygon).
-function DebotShape({ o, size, sel, hov, hex }: { o: any; size: number; sel: boolean; hov: boolean; hex: string }) {
-  const sides = (o.vertices ?? 6) < 3 ? 0 : o.vertices;
+function DebotShape({ o, size, sel, hov, hex, globalVertices }: { o: any; size: number; sel: boolean; hov: boolean; hex: string; globalVertices?: number | null }) {
+  const rawSides = globalVertices ?? o.vertices ?? 0;
+  const sides = rawSides < 3 ? 0 : rawSides;
   const r = size / 2 - 2;
   const cx = size / 2;
   const cy = size / 2;
   const stroke = sel ? hex : hov ? `${hex}80` : `${hex}50`;
   const fill = sel ? `${hex}22` : `${hex}10`;
-  const clipId = `debot-clip-${o.id}`;
+  const clipId = `debot-clip-${o.id}-${size}`;
 
   return (
     <svg width={size} height={size} style={{ display: "block" }}>
@@ -46,7 +48,16 @@ function DebotShape({ o, size, sel, hov, hex }: { o: any; size: number; sel: boo
       )}
 
       {o.sprite && (
-        <image href={o.sprite} x="0" y="0" width={size} height={size} clipPath={`url(#${clipId})`} preserveAspectRatio="xMidYMid slice" />
+        <foreignObject x="0" y="0" width={size} height={size} clipPath={`url(#${clipId})`}>
+          {/* @ts-ignore - xmlns is required inside foreignObject but TS's JSX typing doesn't know it */}
+          <div xmlns="http://www.w3.org/1999/xhtml" style={{ width: size, height: size }}>
+            <img
+              src={o.sprite}
+              alt=""
+              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+            />
+          </div>
+        </foreignObject>
       )}
 
       {sel && (sides === 0 ? (
@@ -59,6 +70,7 @@ function DebotShape({ o, size, sel, hov, hex }: { o: any; size: number; sel: boo
 }
 
 export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: any) {
+  const { debotVertices } = useGame();
   const [hoveredId, setHoveredId] = useState<any>(null); // cosmetic hover glow only
   const [viewedId, setViewedId] = useState<any>(null);   // which debot the panel is showing
 
@@ -120,7 +132,7 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
               onMouseLeave={() => setHoveredId(null)}
             >
               <div style={{ position: "relative" }}>
-                <DebotShape o={o} size={CARD_SIZE} sel={sel} hov={hov} hex={hex} />
+                <DebotShape o={o} size={CARD_SIZE} sel={sel} hov={hov} hex={hex} globalVertices={debotVertices} />
                 {sel && (
                   <div style={{ position: "absolute", top: 2, right: 4, fontSize: 11, color: hex, fontWeight: 700 }}>✓</div>
                 )}
@@ -164,7 +176,7 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
             {focus.sprite && (
               <div style={{ flexShrink: 0 }}>
-                <DebotShape o={focus} size={44} sel={false} hov={false} hex={focusHex || "#6b9fff"} />
+                <DebotShape o={focus} size={44} sel={false} hov={false} hex={focusHex || "#6b9fff"} globalVertices={debotVertices} />
               </div>
             )}
             <div>

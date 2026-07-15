@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
+import { useGame } from "@/contexts/GameContext";
 
 const supabase = createClient();
 
@@ -24,7 +25,7 @@ type AdminPanelProps = {
 const EMOTIONS = ["confident", "angry", "shocked", "neutral", "defeated"];
 
 export function AdminPanel({ profile }: AdminPanelProps) {
-  const [tab, setTab] = useState<"debots" | "topics" | "settings">("debots");
+  const [tab, setTab] = useState<"debots" | "topics" | "settings" | "ai">("debots");
 
   // Fail closed: no profile, or not an admin -> render nothing at all.
   if (!profile?.is_admin) return null;
@@ -34,14 +35,19 @@ export function AdminPanel({ profile }: AdminPanelProps) {
       <div style={{ fontSize: 11, color: "var(--amber)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>
         ⚙ Admin
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        {(["debots", "topics", "settings"] as const).map((t) => (
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        {([
+          ["debots", "Debots"],
+          ["topics", "Topics"],
+          ["settings", "Settings"],
+          ["ai", "AI"],
+        ] as const).map(([t, label]) => (
           <button
             key={t}
             className={`btn btn-sm ${tab === t ? "btn-primary" : "btn-ghost"}`}
             onClick={() => setTab(t)}
           >
-            {t[0].toUpperCase() + t.slice(1)}
+            {label}
           </button>
         ))}
       </div>
@@ -49,6 +55,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
       {tab === "debots" && <DebotsAdmin />}
       {tab === "topics" && <TopicsAdmin />}
       {tab === "settings" && <SettingsAdmin />}
+      {tab === "ai" && <AiSettingsAdmin />}
     </div>
   );
 }
@@ -64,7 +71,7 @@ const BLANK_DEBOT = {
   personality: "",
   depth: "",
   story: "",
-  vertices: 6,
+  arg_sentences: 3,
   sprite_url: null as string | null,
   sprite_emotions: {} as Record<string, string>,
   multiplier: 1,
@@ -77,12 +84,30 @@ const BLANK_DEBOT = {
 };
 
 function DebotsAdmin() {
+  const { refetchDebots } = useGame();
   const [debots, setDebots] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<any>(null); // null = not editing, object = form data
+  const [editSnapshot, setEditSnapshot] = useState<any>(null); // last-saved field values, to detect unsaved changes on Exit
+  const [confirmExit, setConfirmExit] = useState(false);
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<any>(null);
   const [status, setStatus] = useState("");
   const [uploading, setUploading] = useState<string | null>(null); // which slot is mid-upload
+
+  // Only the fields Save actually persists — sprite fields are excluded since
+  // those already save immediately on upload, not batched into this diff.
+  function fieldSnapshot(e: any) {
+    return {
+      name: e.name, sub: e.sub, personality: e.personality, depth: e.depth, story: e.story,
+      arg_sentences: e.arg_sentences, multiplier: e.multiplier, cost: e.cost, max_hp: e.max_hp,
+      color: e.color, diff: e.diff, dc: e.dc, reward: e.reward,
+    };
+  }
+
+  function hasUnsavedChanges() {
+    if (!editSnapshot || !editing) return false;
+    return JSON.stringify(fieldSnapshot(editing)) !== JSON.stringify(editSnapshot);
+  }
 
   async function load() {
     setLoading(true);
@@ -96,16 +121,39 @@ function DebotsAdmin() {
 
   function startEdit(d: any) {
     setConfirmingDeleteId(null);
-    setEditing({ ...d, sprite_emotions: d.sprite_emotions || {} });
+    const next = { ...d, sprite_emotions: d.sprite_emotions || {} };
+    setEditing(next);
+    setEditSnapshot(fieldSnapshot(next));
+    setConfirmExit(false);
   }
 
   function startNew() {
     setConfirmingDeleteId(null);
     setEditing({ ...BLANK_DEBOT });
+    setEditSnapshot(fieldSnapshot(BLANK_DEBOT));
+    setConfirmExit(false);
   }
 
   function cancelEdit() {
     setEditing(null);
+    setEditSnapshot(null);
+    setConfirmExit(false);
+  }
+
+  // Exit button: only warns if the batched fields (name, cost, personality,
+  // etc.) differ from what's actually saved. Sprite uploads are already
+  // persisted the moment they succeed, so they never trigger this.
+  function attemptExit() {
+    if (hasUnsavedChanges()) {
+      setConfirmExit(true);
+    } else {
+      cancelEdit();
+    }
+  }
+
+  async function saveAndExit() {
+    await save();
+    cancelEdit();
   }
 
   function updateField(key: string, value: any) {
@@ -125,7 +173,7 @@ function DebotsAdmin() {
       personality: editing.personality,
       depth: editing.depth,
       story: editing.story,
-      vertices: Math.max(0, Math.min(10, Number(editing.vertices) || 0)),
+      arg_sentences: Math.max(1, Math.min(8, Number(editing.arg_sentences) || 3)),
       multiplier: Number(editing.multiplier) || 1,
       cost: Number(editing.cost) || 0,
       max_hp: Number(editing.max_hp) || 100,
@@ -136,11 +184,15 @@ function DebotsAdmin() {
     };
 
     const res = editing.id
-      ? await supabase.from("debots").update(payload).eq("id", editing.id)
+      ? await supabase.from("debots").update(payload).eq("id", editing.id).select()
       : await supabase.from("debots").insert(payload).select().single();
 
     if (res.error) {
       setStatus(`Failed: ${res.error.message}`);
+      return;
+    }
+    if (editing.id && (!res.data || (Array.isArray(res.data) && res.data.length === 0))) {
+      setStatus("Update didn't apply — the 'debots' table UPDATE policy may be blocking this admin account.");
       return;
     }
 
@@ -149,11 +201,16 @@ function DebotsAdmin() {
     // id) instead of bouncing back to the list, so sprite upload is usable
     // immediately without having to re-open the edit screen.
     if (!editing.id && res.data) {
-      setEditing({ ...res.data, sprite_emotions: res.data.sprite_emotions || {} });
+      const next = { ...res.data, sprite_emotions: res.data.sprite_emotions || {} };
+      setEditing(next);
+      setEditSnapshot(fieldSnapshot(next));
     } else {
       setEditing(null);
+      setEditSnapshot(null);
     }
+    setConfirmExit(false);
     load();
+    refetchDebots();
   }
 
   async function confirmDelete(id: any) {
@@ -164,6 +221,7 @@ function DebotsAdmin() {
     else {
       setStatus("Debot deleted.");
       load();
+      refetchDebots();
     }
   }
 
@@ -188,21 +246,69 @@ function DebotsAdmin() {
       const url = pub.publicUrl;
 
       if (slot === "base") {
-        const { error: dbErr } = await supabase.from("debots").update({ sprite_url: url }).eq("id", editing.id);
+        const { data: dbData, error: dbErr } = await supabase.from("debots").update({ sprite_url: url }).eq("id", editing.id).select();
         if (dbErr) throw dbErr;
+        // A successful call with zero rows returned means RLS silently blocked
+        // the write (Postgres/PostgREST don't error on that) — the file is in
+        // storage but the debot row never got the URL, so it'll look "gone"
+        // the moment this component re-reads from the DB.
+        if (!dbData || dbData.length === 0) {
+          throw new Error("Update didn't apply — check the 'debots' table UPDATE policy allows this admin account (RLS may be silently blocking it).");
+        }
         setEditing((prev: any) => ({ ...prev, sprite_url: url }));
       } else {
         const nextEmotions = { ...(editing.sprite_emotions || {}), [slot]: url };
-        const { error: dbErr } = await supabase.from("debots").update({ sprite_emotions: nextEmotions }).eq("id", editing.id);
+        const { data: dbData, error: dbErr } = await supabase.from("debots").update({ sprite_emotions: nextEmotions }).eq("id", editing.id).select();
         if (dbErr) throw dbErr;
+        if (!dbData || dbData.length === 0) {
+          throw new Error("Update didn't apply — check the 'debots' table UPDATE policy allows this admin account (RLS may be silently blocking it).");
+        }
         setEditing((prev: any) => ({ ...prev, sprite_emotions: nextEmotions }));
       }
 
       setStatus("Sprite uploaded.");
       load();
+      refetchDebots();
     } catch (err: any) {
       console.error(err);
       setStatus(`Upload failed: ${err.message || err}`);
+    }
+    setUploading(null);
+  }
+
+  // Clears a slot back to "no sprite" — both the DB reference and, best
+  // effort, the underlying storage file. The DB write is what actually
+  // matters for display; storage cleanup just avoids orphaned files.
+  async function removeSprite(slot: string) {
+    if (!editing?.id) return;
+    setUploading(slot);
+    setStatus("Removing…");
+
+    try {
+      if (slot === "base") {
+        const { data: dbData, error: dbErr } = await supabase.from("debots").update({ sprite_url: null }).eq("id", editing.id).select();
+        if (dbErr) throw dbErr;
+        if (!dbData || dbData.length === 0) {
+          throw new Error("Removal didn't apply — check the 'debots' table UPDATE policy allows this admin account.");
+        }
+        setEditing((prev: any) => ({ ...prev, sprite_url: null }));
+      } else {
+        const nextEmotions = { ...(editing.sprite_emotions || {}) };
+        delete nextEmotions[slot];
+        const { data: dbData, error: dbErr } = await supabase.from("debots").update({ sprite_emotions: nextEmotions }).eq("id", editing.id).select();
+        if (dbErr) throw dbErr;
+        if (!dbData || dbData.length === 0) {
+          throw new Error("Removal didn't apply — check the 'debots' table UPDATE policy allows this admin account.");
+        }
+        setEditing((prev: any) => ({ ...prev, sprite_emotions: nextEmotions }));
+      }
+
+      setStatus("Sprite removed.");
+      load();
+      refetchDebots();
+    } catch (err: any) {
+      console.error(err);
+      setStatus(`Remove failed: ${err.message || err}`);
     }
     setUploading(null);
   }
@@ -219,7 +325,7 @@ function DebotsAdmin() {
           <LabeledInput label="Difficulty label" value={editing.diff} onChange={(v) => updateField("diff", v)} />
           <LabeledInput label="Difficulty color (dc)" value={editing.dc} onChange={(v) => updateField("dc", v)} />
           <LabeledInput label="Color" value={editing.color} onChange={(v) => updateField("color", v)} />
-          <LabeledInput label="Vertices (0=circle, up to 10)" value={editing.vertices} onChange={(v) => updateField("vertices", v)} type="number" />
+          <LabeledInput label="Argument length (sentences)" value={editing.arg_sentences ?? 3} onChange={(v) => updateField("arg_sentences", v)} type="number" />
           <LabeledInput label="Cost (❋)" value={editing.cost} onChange={(v) => updateField("cost", v)} type="number" />
           <LabeledInput label="Reward (❋)" value={editing.reward} onChange={(v) => updateField("reward", v)} type="number" />
           <LabeledInput label="Max HP" value={editing.max_hp} onChange={(v) => updateField("max_hp", v)} type="number" />
@@ -241,6 +347,7 @@ function DebotsAdmin() {
               disabled={!editing.id}
               uploading={uploading === "base"}
               onFile={(f) => uploadSprite(f, "base")}
+              onRemove={() => removeSprite("base")}
             />
             {EMOTIONS.map((em) => (
               <SpriteSlot
@@ -250,6 +357,7 @@ function DebotsAdmin() {
                 disabled={!editing.id}
                 uploading={uploading === em}
                 onFile={(f) => uploadSprite(f, em)}
+                onRemove={() => removeSprite(em)}
               />
             ))}
           </div>
@@ -260,8 +368,22 @@ function DebotsAdmin() {
 
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
           <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
-          <button className="btn btn-ghost btn-sm" onClick={cancelEdit}>Done</button>
+          <button className="btn btn-ghost btn-sm" onClick={attemptExit}>Exit</button>
         </div>
+
+        {confirmExit && (
+          <div className="card" style={{ marginTop: 10, padding: 12, borderColor: "var(--amber)" }}>
+            <div style={{ fontSize: 12, color: "var(--text)", marginBottom: 10 }}>
+              You have unsaved changes. Save before exiting?
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={saveAndExit}>Save &amp; Exit</button>
+              <button className="btn btn-danger btn-sm" style={{ flex: 1 }} onClick={cancelEdit}>Discard</button>
+              <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => setConfirmExit(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
+
         {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
       </div>
     );
@@ -283,7 +405,7 @@ function DebotsAdmin() {
               <span style={{ width: 10, height: 10, borderRadius: 3, background: d.color, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</div>
-                <div style={{ fontSize: 11, color: "var(--muted)" }}>{d.diff} · ❋{d.cost} · ×{d.multiplier} · {d.vertices ?? 6}v</div>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>{d.diff} · ❋{d.cost} · ×{d.multiplier} · {d.arg_sentences ?? 3} sent.</div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={() => startEdit(d)}>Edit</button>
               {confirmingDeleteId === d.id ? (
@@ -304,41 +426,61 @@ function DebotsAdmin() {
 }
 
 function SpriteSlot({
-  label, url, disabled, uploading, onFile,
+  label, url, disabled, uploading, onFile, onRemove,
 }: {
-  label: string; url?: string | null; disabled?: boolean; uploading?: boolean; onFile: (f: File) => void;
+  label: string; url?: string | null; disabled?: boolean; uploading?: boolean; onFile: (f: File) => void; onRemove?: () => void;
 }) {
   return (
-    <label style={{
+    <div style={{
       display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
-      width: 64, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1,
+      width: 64, opacity: disabled ? 0.5 : 1,
     }}>
-      <div style={{
-        width: 48, height: 48, borderRadius: 8, overflow: "hidden",
-        border: "1px solid var(--border)", background: "var(--surface2)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}>
-        {uploading ? (
-          <span style={{ fontSize: 9, color: "var(--muted)" }}>…</span>
-        ) : url ? (
-          <img src={url} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-        ) : (
-          <span style={{ fontSize: 16, color: "var(--muted)" }}>+</span>
+      <div style={{ position: "relative", width: 48, height: 48 }}>
+        <label style={{ cursor: disabled ? "not-allowed" : "pointer", display: "block" }}>
+          <div style={{
+            width: 48, height: 48, borderRadius: 8, overflow: "hidden",
+            border: "1px solid var(--border)", background: "var(--surface2)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            {uploading ? (
+              <span style={{ fontSize: 9, color: "var(--muted)" }}>…</span>
+            ) : url ? (
+              <img src={url} alt={label} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            ) : (
+              <span style={{ fontSize: 16, color: "var(--muted)" }}>+</span>
+            )}
+          </div>
+          <input
+            type="file"
+            accept="image/*"
+            disabled={disabled || uploading}
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onFile(f);
+              e.target.value = "";
+            }}
+          />
+        </label>
+
+        {url && !uploading && onRemove && (
+          <button
+            type="button"
+            title={`Remove ${label} sprite`}
+            onClick={onRemove}
+            style={{
+              position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%",
+              background: "var(--red)", color: "#fff", border: "none", cursor: "pointer",
+              fontSize: 11, lineHeight: 1, display: "flex", alignItems: "center", justifyContent: "center",
+              padding: 0,
+            }}
+          >
+            ×
+          </button>
         )}
       </div>
       <span style={{ fontSize: 9, color: "var(--muted)", textTransform: "capitalize", textAlign: "center" }}>{label}</span>
-      <input
-        type="file"
-        accept="image/*"
-        disabled={disabled || uploading}
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onFile(f);
-          e.target.value = "";
-        }}
-      />
-    </label>
+    </div>
   );
 }
 
@@ -473,11 +615,11 @@ function TopicsAdmin() {
 // ===========================================================================
 
 function SettingsAdmin() {
-  const [model, setModel] = useState("");
-  const [maxTokens, setMaxTokens] = useState<number | "">("");
-  const [temperature, setTemperature] = useState<number | "">("");
+  const { refetchSettings } = useGame();
   const [roundsOptionsText, setRoundsOptionsText] = useState("");
   const [roundsDefault, setRoundsDefault] = useState<number | "">("");
+  const [vertices, setVertices] = useState<number | "">("");
+  const [cheatEnabled, setCheatEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
 
@@ -486,21 +628,20 @@ function SettingsAdmin() {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["ai_model", "ai_max_tokens", "ai_temperature", "rounds_options", "rounds_default"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled"]);
 
     if (error) {
-      setStatus(`Failed to load: ${error.message}. Have you run app_settings.sql yet?`);
+      setStatus(`Failed to load: ${error.message}. Have you run app_settings.sql / debots_redesign.sql yet?`);
       setLoading(false);
       return;
     }
 
     const map: Record<string, any> = {};
     for (const row of data || []) map[row.key] = row.value;
-    setModel(map.ai_model ?? "");
-    setMaxTokens(map.ai_max_tokens ?? "");
-    setTemperature(map.ai_temperature ?? "");
     setRoundsOptionsText(Array.isArray(map.rounds_options) ? map.rounds_options.join(", ") : "");
     setRoundsDefault(typeof map.rounds_default === "number" ? map.rounds_default : "");
+    setVertices(typeof map.debot_vertices === "number" ? map.debot_vertices : "");
+    setCheatEnabled(map.debucks_cheat_enabled !== false);
     setLoading(false);
   }
 
@@ -519,15 +660,20 @@ function SettingsAdmin() {
       return;
     }
 
-    const rows = [
-      { key: "ai_model", value: model },
-      { key: "ai_max_tokens", value: Number(maxTokens) || 1000 },
-      { key: "ai_temperature", value: Number(temperature) },
+    const rows: { key: string; value: any }[] = [
       { key: "rounds_options", value: parsedOptions },
       { key: "rounds_default", value: Number(roundsDefault) || parsedOptions[0] },
+      { key: "debucks_cheat_enabled", value: cheatEnabled },
     ];
+    // Vertices is optional — leaving it blank means "let each debot keep its
+    // own shape" rather than forcing one on the whole catalog.
+    if (vertices !== "") {
+      rows.push({ key: "debot_vertices", value: Math.max(0, Math.min(10, Number(vertices))) });
+    }
+
     const { error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" });
     setStatus(error ? `Failed: ${error.message}` : "Settings saved.");
+    if (!error) refetchSettings();
   }
 
   if (loading) return <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>;
@@ -537,12 +683,85 @@ function SettingsAdmin() {
       <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
         Number of Rounds
       </div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
+        Controls the round-count choices players see on the Setup screen, and which one is pre-selected.
+      </div>
       <LabeledInput label="Round options (comma-separated)" value={roundsOptionsText} onChange={setRoundsOptionsText} />
       <div style={{ marginTop: 8 }}>
         <LabeledInput label="Default rounds" value={roundsDefault} onChange={(v) => setRoundsDefault(v === "" ? "" : Number(v))} type="number" />
       </div>
 
-      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 18, marginBottom: 8 }}>
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 20, marginBottom: 8 }}>
+        Debot Shape
+      </div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
+        Applies one vertex count to every debot at once, overriding each debot's individual shape. Leave blank to let each debot keep its own shape.
+      </div>
+      <LabeledInput label="Vertices for all debots (0 = circle, blank = per-debot)" value={vertices} onChange={(v) => setVertices(v === "" ? "" : Number(v))} type="number" />
+
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 20, marginBottom: 8 }}>
+        Debucks Tap Cheat
+      </div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+        Tapping the coin badge 5 times quickly sets a player's coins to 10,000. Turn this off to disable it for everyone.
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+        <input type="checkbox" checked={cheatEnabled} onChange={(e) => setCheatEnabled(e.target.checked)} style={{ accentColor: "var(--blue)" }} />
+        Enable the 5-tap debucks cheat
+      </label>
+
+      <button className="btn btn-primary btn-sm" style={{ marginTop: 14 }} onClick={save}>Save settings</button>
+      {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+    </div>
+  );
+}
+
+function AiSettingsAdmin() {
+  const [model, setModel] = useState("");
+  const [maxTokens, setMaxTokens] = useState<number | "">("");
+  const [temperature, setTemperature] = useState<number | "">("");
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("");
+
+  async function load() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("app_settings")
+      .select("key, value")
+      .in("key", ["ai_model", "ai_max_tokens", "ai_temperature"]);
+
+    if (error) {
+      setStatus(`Failed to load: ${error.message}. Have you run app_settings.sql yet?`);
+      setLoading(false);
+      return;
+    }
+
+    const map: Record<string, any> = {};
+    for (const row of data || []) map[row.key] = row.value;
+    setModel(map.ai_model ?? "");
+    setMaxTokens(map.ai_max_tokens ?? "");
+    setTemperature(map.ai_temperature ?? "");
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function save() {
+    setStatus("Saving…");
+    const rows = [
+      { key: "ai_model", value: model },
+      { key: "ai_max_tokens", value: Number(maxTokens) || 1000 },
+      { key: "ai_temperature", value: Number(temperature) },
+    ];
+    const { error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" });
+    setStatus(error ? `Failed: ${error.message}` : "Settings saved — takes effect on the next AI call.");
+  }
+
+  if (loading) return <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>;
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>
         AI Settings
       </div>
       <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>

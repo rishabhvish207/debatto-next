@@ -1,16 +1,21 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useGame } from "@/contexts/GameContext";
 
 export function TopBar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
-  const { user, signInWithGoogle } = useGame();
+  const { user, signInWithGoogle, requestNavigation } = useGame();
+  const router = useRouter();
 
   return (
     <div className="app-topbar">
-      <Link href="/hub" className="heading" style={{ fontSize: 18, textDecoration: "none", color: "var(--text)" }}>
+      <button
+        onClick={() => requestNavigation(() => router.push("/hub"))}
+        className="heading"
+        style={{ fontSize: 18, background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--text)" }}
+      >
         <span style={{ color: "var(--blue)" }}>Deb</span>atto
-      </Link>
+      </button>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         {!user && (
           <button className="btn btn-ghost btn-sm" onClick={signInWithGoogle}>Log in</button>

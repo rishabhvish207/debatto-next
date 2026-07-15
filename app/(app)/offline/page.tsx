@@ -12,7 +12,6 @@ import { DebucksIcon } from "@/components/ui/DebucksIcon";
 import { DebotStage } from "@/components/arena/DebotStage";
 import { DialogueBox } from "@/components/game/DialogueBox";
 import { InputPanel } from "@/components/game/InputPanel";
-import { ConfirmModal } from "@/components/shell/ConfirmModal";
 import { GAME_CONFIG } from "@/config/Game";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 
@@ -25,6 +24,58 @@ function extractJSON(raw) {
   const s = raw.trim().replace(/^```json\n?/, "").replace(/^```\n?/, "").replace(/\n?```$/, "").trim();
   const a = s.indexOf("{"), b = s.lastIndexOf("}");
   return (a !== -1 && b !== -1) ? s.slice(a, b + 1) : s;
+}
+
+/**
+ * Hard backstop against the judge model just being generous with junk input.
+ * The AI judge is asked to grade harshly, but LLMs (especially smaller/faster
+ * ones) tend to default to charitable mid-range scores even for gibberish —
+ * that's what let "bs" earn ~40 points. This never *increases* a score, it
+ * only flags input that clearly isn't a real argument so we can zero the
+ * gain locally regardless of what the model returned.
+ */
+function isLowEffortInput(text) {
+  const trimmed = (text || "").trim();
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length < 4) return true; // too short to make an actual point
+
+  const letters = trimmed.replace(/[^a-zA-Z]/g, "");
+  if (letters.length < trimmed.length * 0.5) return true; // mostly punctuation/symbols/digits
+
+  const uniqueLetters = new Set(letters.toLowerCase()).size;
+  if (uniqueLetters < 6) return true; // e.g. "asdasd asdasd asdasd"
+
+  const vowels = (letters.match(/[aeiouAEIOU]/g) || []).length;
+  if (letters.length > 12 && vowels / letters.length < 0.15) return true; // no real words = almost no vowels
+
+  const uniqueWords = new Set(words.map((w) => w.toLowerCase()));
+  if (words.length > 5 && uniqueWords.size < words.length * 0.4) return true; // "lol lol lol lol lol"
+
+  return false;
+}
+
+/**
+ * The admin sets a "Difficulty label" per debot (Beginner/Intermediate/...),
+ * but nothing ever told the AI to actually play differently based on it — a
+ * "Beginner" debot argued exactly as hard as anything else. This turns the
+ * label into concrete instructions for both how the debot argues and how
+ * strictly the judge should grade the matchup.
+ */
+function getDifficultyGuidance(diff) {
+  const key = (diff || "").toLowerCase();
+  if (key.includes("beginner") || key.includes("easy")) {
+    return "DIFFICULTY: Beginner. Argue in a genuinely weaker way — simple points, occasional shaky logic or an easy-to-exploit assumption, shorter reasoning chains. Don't be incoherent, just unpolished and beatable. As judge, grade the PLAYER generously: reward reasonable rebuttals, don't nitpick minor imprecision.";
+  }
+  if (key.includes("intermediate") || key.includes("medium")) {
+    return "DIFFICULTY: Intermediate. Argue competently with solid, common-sense reasoning, but don't reach for advanced tactics or airtight logic. As judge, grade the PLAYER fairly by the standard rubric.";
+  }
+  if (key.includes("advanced") || key.includes("hard")) {
+    return "DIFFICULTY: Advanced. Argue sharply — precise claims, real evidence-style reasoning, and directly exploit weak points in the player's argument. As judge, grade the PLAYER strictly — reward only genuinely strong rebuttals.";
+  }
+  if (key.includes("expert") || key.includes("master")) {
+    return "DIFFICULTY: Expert. Argue at a highly skilled level — dense, precise reasoning, anticipate counterarguments, and relentlessly target any weakness in the player's case. As judge, grade the PLAYER very strictly — only exceptional, airtight rebuttals should score high.";
+  }
+  return "DIFFICULTY: Standard. Argue with solid, balanced reasoning and grade the PLAYER fairly by the standard rubric.";
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -40,7 +91,7 @@ export default function OfflinePage() {
     opps, oppsLoading, unlockDebot,
     topics, topicsLoading, saveCustomTopic,
     pinnedTopicIds, toggleTopicPin, deleteTopic,
-    roundOptions, defaultRounds, cheatTapEnabled,
+    roundOptions, defaultRounds, cheatTapEnabled, requestNavigation, settingsLoaded,
     apiError, setApiError,
   } = useGame();
 
@@ -55,7 +106,6 @@ export default function OfflinePage() {
   const [topicSearch, setTopicSearch] = useState("");
   const [rounds, setRounds] = useState(defaultRounds);
   const [savingTopic, setSavingTopic] = useState(false);
-  const [confirmingExit, setConfirmingExit] = useState(false);
   const [aiSearching, setAiSearching] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState(null);
   const [savedSuggestionIdx, setSavedSuggestionIdx] = useState([]);
@@ -148,12 +198,26 @@ export default function OfflinePage() {
     });
   }, [page]);
 
-  // Keep the shared "is a match in progress" flag in sync — the global
-  // BackButton reads this to decide whether to intercept navigation with a
-  // confirm modal. Also clear it on unmount so it can't get stuck true.
+  // Keep the shared "is a match in progress" flag in sync — requestNavigation
+  // (drawer links, header logo, in-match Exit, browser back) reads this to
+  // decide whether to intercept navigation with a confirm modal. Also clear
+  // it on unmount so it can't get stuck true.
   useEffect(() => {
     setBattleActive(page === "battle");
     return () => setBattleActive(false);
+  }, [page]);
+
+  // Closing the tab or hitting refresh mid-match doesn't go through React
+  // Router at all, so requestNavigation can't intercept it — this is the one
+  // case that needs the browser's own native "leave site?" prompt instead.
+  useEffect(() => {
+    if (page !== "battle") return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [page]);
 
   // Derived
@@ -237,6 +301,7 @@ export default function OfflinePage() {
       const sys = `You are ${opp.name} debating ${oppSide} the proposition: "${activeTopic.text}". 
 Personality: ${opp.personality} | Argument Depth: ${opp.depth}
 BACKGROUND STORY: ${opp.story}
+${getDifficultyGuidance(opp.diff)}
 BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not every time) let a line of your argument be colored by your background story — a hint of your past, your present situation, or what you're working toward — without turning the debate into a monologue about yourself. Give a sharp ${n}-sentence opening argument in-character. Return ONLY the argument text.`;
       
       const text = await callAI(sys, "State your opening argument.");
@@ -264,15 +329,17 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
 TOPIC: "${activeTopic.text}" | OPPONENT SIDE: ${oppSide} | PLAYER (${profile.name}): ${curSide} | ROUND: ${round}/${rounds}
 DEBOT PERSONALITY: ${opp.personality} | ARGUMENT DEPTH: ${opp.depth}
 DEBOT BACKGROUND STORY: ${opp.story} (occasionally, not every round, let a hint of past/present/what-they're-working-toward color the opponent_reply)
+${getDifficultyGuidance(opp.diff)}
 EMOTIONAL CONTEXT: ${emotionalState}
 OPPONENT SAID: "${oppArg}"
 PLAYER SAID: "${input}"
 
-JUDGE RULES:
-- gain 0-50: quality of rebuttal.
-- penalty 0-30: ONLY deduct for clear flaws.
+JUDGE RULES — grade like a strict debate judge, not a cheerleader, adjusted for this debot's difficulty above. Most arguments are mediocre; reserve high scores for arguments that earn them.
+- gain 0-50, anchored: 0-5 = off-topic, incoherent, or restates opponent with no new point. 6-15 = on-topic but shallow/unsupported assertion. 16-30 = a real point with some reasoning or evidence. 31-40 = a well-reasoned rebuttal that directly engages the opponent's specific claim. 41-50 = exceptional — direct refutation, evidence/logic, and precision, reserved for genuinely strong debate.
+- Before scoring, silently check: does this response engage with "${oppArg}" specifically, and does it make actual sense in English? If either check fails, gain must be 0-5 regardless of length or confident tone.
+- penalty 0-30: deduct for logical fallacies, irrelevance, contradictions, or restating without advancing the argument. Low-effort or nonsensical input should receive a HIGH penalty (20-30), not a low one.
 - impact from net: 35+→Devastating, 25-34→Strong, 14-24→Solid, 5-13→Weak, <5→Ineffective
-- opponent_gain 0-40, opponent_penalty 0-15: evaluate opponent's prior argument independently.
+- opponent_gain 0-40, opponent_penalty 0-15: evaluate opponent's prior argument independently, by the same strict standard.
 - weak_points: 2-4 SHORT targetable phrases from YOUR new opponent_reply.
 - fallacies: fallacies in the PLAYER's response only.
 
@@ -294,17 +361,19 @@ Return ONLY valid JSON:
       const raw = await callAI(sys, "Evaluate and respond.");
       const ev = JSON.parse(extractJSON(raw));
 
-      const g = clamp(ev.gain || 0, 0, GAME_CONFIG.scoring.maxGain);
-      const p = clamp(ev.penalty || 0, 0, GAME_CONFIG.scoring.maxPenalty);
+      const lowEffort = isLowEffortInput(input);
+      const g = lowEffort ? 0 : clamp(ev.gain || 0, 0, GAME_CONFIG.scoring.maxGain);
+      const p = lowEffort ? GAME_CONFIG.scoring.maxPenalty : clamp(ev.penalty || 0, 0, GAME_CONFIG.scoring.maxPenalty);
       const net = Math.max(0, g - p);
 
       const og = clamp(ev.opponent_gain || 0, 0, GAME_CONFIG.scoring.maxOppGain);
       const op2 = clamp(ev.opponent_penalty || 0, 0, GAME_CONFIG.scoring.maxOppPenalty);
       const oNet = Math.max(0, og - op2);
 
-      // Apply Player Damage Immediately (each debot has its own damage multiplier from the DB)
-      const dmgMultiplier = opp.multiplier ?? GAME_CONFIG.damage.playerMultiplier;
-      const calculatedNewOHP = Math.max(0, oHP - Math.floor(net * dmgMultiplier));
+      // Player's damage to the opponent uses the flat, game-wide multiplier —
+      // it's not something any one debot's stats should affect.
+      const calculatedNewOHP = Math.max(0, oHP - Math.floor(net * GAME_CONFIG.damage.playerMultiplier));
+      const playerDmgDealt = oHP - calculatedNewOHP;
       setOHP(calculatedNewOHP);
       setPPts(x => x + net);
       if (net > 8) shakeEl("opp", net);
@@ -314,10 +383,26 @@ Return ONLY valid JSON:
       else if (net >= 15) setEmotion("angry");
       else setEmotion("neutral");
 
-      // Save opponent's upcoming counter-damage for Phase 2
-      setPendingOppDamage({ oNet, newPHP: Math.max(0, pHP - Math.floor(oNet * GAME_CONFIG.damage.opponentMultiplier)) });
+      // Save opponent's upcoming counter-damage for Phase 2 — this is where
+      // the per-debot "Damage multiplier" (opp.multiplier) actually belongs,
+      // since it's this debot's own attack against the player. dmgDealt is
+      // tracked separately from oNet (the score) specifically so the UI can
+      // display the real, multiplied HP damage instead of the raw score —
+      // showing the raw score there was what made the multiplier look broken.
+      const oppDmgMultiplier = opp.multiplier ?? GAME_CONFIG.damage.opponentMultiplier;
+      const newPHP = Math.max(0, pHP - Math.floor(oNet * oppDmgMultiplier));
+      const oppDmgDealt = pHP - newPHP;
+      setPendingOppDamage({ oNet, newPHP, dmgDealt: oppDmgDealt });
       
-      const full = { ...ev, gain: g, penalty: p, net, oNet };
+      const full = {
+        ...ev,
+        gain: g,
+        penalty: p,
+        net,
+        oNet,
+        dmgDealt: playerDmgDealt,
+        critique: lowEffort ? "That didn't actually engage with the argument — try addressing their point directly." : ev.critique,
+      };
       setLastEval(full);
       setNextOppArg(ev.opponent_reply || "");
       setPhase("player-scored"); // Transition to cinematic phase 1
@@ -441,7 +526,9 @@ Return ONLY valid JSON:
         {/* ── Rounds & Topic ── */}
         <div style={{ fontSize: 12, color: "var(--muted)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>Number of Rounds</div>
         <div style={{ display: "flex", gap: 9, marginBottom: 26, flexWrap: "wrap" }}>
-          {roundOptions.map(r => (
+          {!settingsLoaded ? (
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>Loading…</div>
+          ) : roundOptions.map(r => (
             <button key={r} className={`btn ${rounds === r ? "btn-primary" : "btn-ghost"}`} onClick={() => setRounds(r)}>{r} Rounds</button>
           ))}
         </div>
@@ -647,7 +734,7 @@ Return ONLY valid JSON:
 
         <div className="card" style={{ padding: "10px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 7 }}>
-            <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }} onClick={() => setConfirmingExit(true)}>← Exit</button>
+            <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }} onClick={() => requestNavigation(() => setPage("setup"))}>← Exit</button>
             <div style={{ fontSize: 12, color: "var(--muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{activeTopic?.text}"</div>
             <span className="badge" style={{ background: "var(--faint)", color: "var(--muted)" }}>R {round}/{rounds}</span>
             <span className="badge" onClick={handleCoinTap} style={{ background: "var(--amber-soft)", color: "var(--amber)" }}><DebucksIcon style={{ marginRight: 4 }} />{profile.coins}</span>
@@ -670,7 +757,7 @@ Return ONLY valid JSON:
                 <span className="badge" style={{ background: "var(--blue-soft)", color: "var(--blue)", fontSize: 10, alignSelf: "flex-start" }}>{curSide}</span>
                 <div style={{ height: 150, maxWidth: 150, width: "100%", margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
                   <div style={{ width: 130, height: 130, flexShrink: 0, transition: "transform 0.6s ease", transform: `scale(${pScale})`, transformOrigin: "center center" }}>
-                    <PlayerSprite shake={shakeP} name={profile.name} />
+                    <PlayerSprite shake={shakeP} name={profile.name} avatarUrl={profile.avatar_url} />
                   </div>
                 </div>
                 <div>
@@ -728,6 +815,7 @@ Return ONLY valid JSON:
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--blue)" }}>+{lastEval.net} Pts</div>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>−{lastEval.dmgDealt ?? lastEval.net} HP</div>
               </div>
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", fontStyle: "italic", marginBottom: 14 }}>"{lastEval.critique}"</div>
@@ -740,7 +828,10 @@ Return ONLY valid JSON:
           <div className="card anim-fade-up" style={{ padding: 18, borderColor: "var(--red-soft)", background: "rgba(255,0,0,0.05)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                <div className="heading" style={{ fontSize: 20, color: "var(--red)" }}>Debot Retaliation</div>
-               <div style={{ fontSize: 16, fontWeight: 600, color: "var(--red)" }}>+{pendingOppDamage.oNet} Pts</div>
+               <div style={{ textAlign: "right" }}>
+                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--red)" }}>+{pendingOppDamage.oNet} Pts</div>
+                 <div style={{ fontSize: 12, color: "var(--muted)" }}>−{pendingOppDamage.dmgDealt ?? pendingOppDamage.oNet} HP</div>
+               </div>
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>The debot fired back, dealing damage to your HP.</div>
             <button className="btn btn-primary" style={{ width: "100%" }} onClick={advanceRound}>Next Round →</button>
@@ -788,18 +879,9 @@ Return ONLY valid JSON:
             hintsLeft={hintsLeft}
             onAns={getAns}
             ansCost={ansCost}
+            ansUsed={ansUsed}
+            maxAnsUses={GAME_CONFIG.showAnswer.maxUses}
             coins={profile.coins}
-          />
-        )}
-
-        {confirmingExit && (
-          <ConfirmModal
-            title="Exit this match?"
-            message="Leaving now will end the debate and lose your progress in this round."
-            confirmLabel="Exit anyway"
-            cancelLabel="Stay"
-            onConfirm={() => { setConfirmingExit(false); setPage("setup"); }}
-            onCancel={() => setConfirmingExit(false)}
           />
         )}
       </div>
@@ -811,7 +893,11 @@ Return ONLY valid JSON:
     const won = oHP <= 0 || pPts > oPts;
     const draw = !won && (pHP <= 0 || oPts > pPts) ? false : pPts === oPts;
     const label = draw ? "Draw" : won ? "Victory" : "Defeat";
-    const totalReward = won ? opp.reward + GAME_CONFIG.bonus.noPenalty : 0;
+    // opp.reward is calibrated for a "default length" match (defaultRounds),
+    // so a 2-round match and a 30-round match shouldn't pay the same flat
+    // amount — scale it by how many rounds were actually played.
+    const roundsFactor = rounds / (defaultRounds || 10);
+    const totalReward = won ? Math.max(1, Math.round(opp.reward * roundsFactor)) + GAME_CONFIG.bonus.noPenalty : 0;
 
     return (
       <div className="root" style={{ minHeight: "100vh", padding: "24px 16px", maxWidth: 720, margin: "0 auto" }}>

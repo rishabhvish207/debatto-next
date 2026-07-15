@@ -57,9 +57,14 @@ type GameContextValue = {
 
   roundOptions: number[];
   defaultRounds: number;
+  settingsLoaded: boolean;
   debotVertices: number | null;
   cheatTapEnabled: boolean;
   refetchSettings: () => Promise<void>;
+  requestNavigation: (action: () => void) => void;
+  pendingNavAction: boolean;
+  confirmNavigation: () => void;
+  cancelNavigation: () => void;
 
   battleActive: boolean;
   setBattleActive: (active: boolean) => void;
@@ -91,12 +96,35 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [topics, setTopics] = useState<any[]>([]);
   const [topicsLoading, setTopicsLoading] = useState(true);
 
-  const [roundOptions, setRoundOptions] = useState<number[]>(GAME_CONFIG.rounds.options);
+  const [roundOptions, setRoundOptions] = useState<number[]>([]); // empty until fetchGameSettings resolves — avoids flashing the hardcoded fallback
   const [defaultRounds, setDefaultRounds] = useState<number>(GAME_CONFIG.rounds.default);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [pinnedTopicIds, setPinnedTopicIds] = useState<any[]>([]);
   const [hiddenTopicIds, setHiddenTopicIds] = useState<any[]>([]); // system topics this user has personally removed
   const [debotVertices, setDebotVertices] = useState<number | null>(null); // null = each debot uses its own
   const [cheatTapEnabled, setCheatTapEnabled] = useState<boolean>(true);
+  const [pendingNavAction, setPendingNavAction] = useState<(() => void) | null>(null);
+
+  // Any navigation that might leave an in-progress match (drawer links, the
+  // header logo, the in-match Exit button, browser back) should go through
+  // this instead of acting immediately — it only defers when battleActive is
+  // actually true, so it's a no-op everywhere else.
+  function requestNavigation(action: () => void) {
+    if (battleActive) {
+      setPendingNavAction(() => action);
+    } else {
+      action();
+    }
+  }
+  function confirmNavigation() {
+    setBattleActive(false);
+    const action = pendingNavAction;
+    setPendingNavAction(null);
+    action?.();
+  }
+  function cancelNavigation() {
+    setPendingNavAction(null);
+  }
 
   const [apiError, setApiError] = useState("");
   const [battleActive, setBattleActive] = useState(false);
@@ -373,21 +401,24 @@ export function GameProvider({ children }: { children: ReactNode }) {
       .select("key, value")
       .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled"]);
 
-    if (error || !data) return; // keep the GAME_CONFIG fallback silently
+    if (error || !data) {
+      // DB fetch failed — fall back to config so the UI has *something*
+      // correct to show, rather than sitting on the empty initial state.
+      setRoundOptions(GAME_CONFIG.rounds.options);
+      setSettingsLoaded(true);
+      return;
+    }
 
     const map: Record<string, any> = {};
     for (const row of data) map[row.key] = row.value;
 
-    if (Array.isArray(map.rounds_options) && map.rounds_options.length) {
-      setRoundOptions(map.rounds_options);
-    }
-    if (typeof map.rounds_default === "number") {
-      setDefaultRounds(map.rounds_default);
-    }
+    setRoundOptions(Array.isArray(map.rounds_options) && map.rounds_options.length ? map.rounds_options : GAME_CONFIG.rounds.options);
+    setDefaultRounds(typeof map.rounds_default === "number" ? map.rounds_default : GAME_CONFIG.rounds.default);
     setDebotVertices(typeof map.debot_vertices === "number" ? map.debot_vertices : null);
     // Defaults to enabled (true) if the key was never set, so existing guests
     // keep the behavior they always had until an admin explicitly turns it off.
     setCheatTapEnabled(map.debucks_cheat_enabled !== false);
+    setSettingsLoaded(true);
   };
 
   useEffect(() => {
@@ -498,9 +529,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
         deleteTopic,
         roundOptions,
         defaultRounds,
+        settingsLoaded,
         debotVertices,
         cheatTapEnabled,
         refetchSettings: fetchGameSettings,
+        requestNavigation,
+        pendingNavAction: !!pendingNavAction,
+        confirmNavigation,
+        cancelNavigation,
         battleActive,
         setBattleActive,
         apiError,

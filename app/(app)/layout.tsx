@@ -4,9 +4,10 @@ import { useState } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { TopBar } from "@/components/shell/TopBar";
 import { RightDrawer } from "@/components/shell/RightDrawer";
+import { ConfirmModal } from "@/components/shell/ConfirmModal";
 
 export default function AppGroupLayout({ children }: { children: React.ReactNode }) {
-  const { apiError, setApiError } = useGame();
+  const { apiError, setApiError, pendingNavAction, confirmNavigation, cancelNavigation } = useGame();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   return (
@@ -26,6 +27,17 @@ export default function AppGroupLayout({ children }: { children: React.ReactNode
       )}
 
       {children}
+
+      {pendingNavAction && (
+        <ConfirmModal
+          title="Exit this match?"
+          message="Leaving now will end the debate and lose your progress in this round."
+          confirmLabel="Exit anyway"
+          cancelLabel="Stay"
+          onConfirm={confirmNavigation}
+          onCancel={cancelNavigation}
+        />
+      )}
     </div>
   );
 }

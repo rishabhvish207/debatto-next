@@ -1,11 +1,17 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useGame } from "@/contexts/GameContext";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
 
 export function RightDrawer({ onClose }: { onClose: () => void }) {
-  const { user, profile, signInWithGoogle, signOut } = useGame();
+  const { user, profile, signInWithGoogle, signOut, requestNavigation } = useGame();
+  const router = useRouter();
+
+  function go(href: string) {
+    onClose();
+    requestNavigation(() => router.push(href));
+  }
 
   return (
     <>
@@ -34,19 +40,19 @@ export function RightDrawer({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <Link href="/profile" className="drawer-item" onClick={onClose}>
+        <button className="drawer-item" onClick={() => go("/profile")}>
           <span style={{ width: 20, textAlign: "center" }}>👤</span> Profile
-        </Link>
-        <Link href="/history" className="drawer-item" onClick={onClose}>
+        </button>
+        <button className="drawer-item" onClick={() => go("/history")}>
           <span style={{ width: 20, textAlign: "center" }}>📜</span> Match History
-        </Link>
-        <Link href="/settings" className="drawer-item" onClick={onClose}>
+        </button>
+        <button className="drawer-item" onClick={() => go("/settings")}>
           <span style={{ width: 20, textAlign: "center" }}>⚙</span> Settings
-        </Link>
+        </button>
         {profile?.is_admin && (
-          <Link href="/admin" className="drawer-item" style={{ color: "var(--amber)" }} onClick={onClose}>
+          <button className="drawer-item" style={{ color: "var(--amber)" }} onClick={() => go("/admin")}>
             <span style={{ width: 20, textAlign: "center" }}>🛠</span> Admin
-          </Link>
+          </button>
         )}
       </div>
     </>

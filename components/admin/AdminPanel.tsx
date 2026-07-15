@@ -671,9 +671,17 @@ function SettingsAdmin() {
       rows.push({ key: "debot_vertices", value: Math.max(0, Math.min(10, Number(vertices))) });
     }
 
-    const { error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" });
-    setStatus(error ? `Failed: ${error.message}` : "Settings saved.");
-    if (!error) refetchSettings();
+    const { data: upsertData, error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" }).select();
+    if (error) {
+      setStatus(`Failed: ${error.message}`);
+      return;
+    }
+    if (!upsertData || upsertData.length < rows.length) {
+      setStatus("Some settings didn't save — check the 'app_settings' table's INSERT/UPDATE policies allow this admin account (RLS may be silently blocking part of the write).");
+      return;
+    }
+    setStatus("Settings saved.");
+    refetchSettings();
   }
 
   if (loading) return <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>;

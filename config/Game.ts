@@ -1,8 +1,8 @@
 export const GAME_CONFIG = {
-  defaultName: "debater bro",
+  defaultName: "Guest",
 
   economy: {
-    startingCoins: 10000,
+    startingCoins: 10,
     winReward: 10,
     showAnswerCost: 3,
   },

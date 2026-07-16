@@ -272,7 +272,7 @@ export default function OfflinePage() {
     setAiSearching(false);
   }
 
-  async function saveSuggestion(suggestion, idx) {
+  async function saveSuggestion(suggestion: any, idx: number) {
     const ok = await saveCustomTopic(suggestion.text, suggestion.cat || "Custom");
     if (ok) setSavedSuggestionIdx(prev => [...prev, idx]);
   }

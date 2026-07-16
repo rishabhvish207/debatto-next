@@ -4,7 +4,6 @@ export const GAME_CONFIG = {
   economy: {
     startingCoins: 10,
     winReward: 10,
-    showAnswerCost: 3,
   },
 
   rounds: {
@@ -33,8 +32,26 @@ export const GAME_CONFIG = {
     domination: 8,
   },
 
-  showAnswer: {
-    baseCost: 3,
-    maxUses: 5,
+  // Store — items are bought here with debucks, then *used for free* out of
+  // inventory during a match. No more per-use coin spending mid-battle.
+  store: {
+    // Gear: one-time, permanent purchases.
+    insightLens: {
+      cost: 50, // permanently unlocks the in-match Hint lifeline
+    },
+    // Consumables: stack up to maxStock, spent one-at-a-time in battle.
+    aceCard: {
+      // "Show Answer". Price per purchase doubles each time you buy
+      // (2, 4, 8, 16, 32, …) — using them doesn't reduce the price, only
+      // buying does, and the count only ever climbs back toward maxStock.
+      baseCost: 2,
+      maxStock: 10,
+    },
+    confidencePill: {
+      // Flat price every time, unlike Ace Cards. Heals HP on use.
+      cost: 5,
+      maxStock: 5,
+      healAmount: 10,
+    },
   },
 };

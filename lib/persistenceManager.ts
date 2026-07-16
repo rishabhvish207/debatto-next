@@ -5,7 +5,7 @@
 // through here instead. The caller never branches on guest-vs-logged-in —
 // this module does that once, internally.
 //
-// Domains supported today: profile, debots, topics, history.
+// Domains supported today: profile, debots, topics, history, inventory.
 // Adding a new persisted feature (themes, voice preferences, etc.) means
 // adding one case to each switch below — not touching call sites elsewhere.
 
@@ -15,7 +15,7 @@ const supabase = createClient();
 
 export type AuthUser = { id: string } | null;
 
-type Domain = "profile" | "debots" | "topics" | "history";
+type Domain = "profile" | "debots" | "topics" | "history" | "inventory";
 
 const PINNED_TOPICS_LOCAL_KEY = "debatto:pinned_topics"; // string[] of topic ids, guest-only
 const HIDDEN_TOPICS_LOCAL_KEY = "debatto:hidden_topics"; // string[] of system-topic ids this guest has personally removed
@@ -25,6 +25,7 @@ const LOCAL_KEYS: Record<Domain, string> = {
   debots: "debatto:unlocked_debots",   // string[] of debot ids the guest owns
   topics: "debatto:custom_topics",     // array of custom topic objects
   history: "debatto:match_history",    // array of { debotId, topicText, result, playerScore, opponentScore, rounds }
+  inventory: "debatto:inventory",      // { insightLens, aceCards, acePurchases, confidencePills } — store items owned
 };
 
 
@@ -101,6 +102,8 @@ export async function saveGameData(
       return writeTopic(user.id, value); // value: { text, cat, ... }
     case "history":
       return writeMatch(user.id, value); // value: match record, see writeMatch()
+    case "inventory":
+      return writeInventory(user.id, value); // value: partial { insightLens, aceCards, acePurchases, confidencePills }
   }
 }
 
@@ -109,7 +112,7 @@ export async function saveGameData(
  */
 export async function loadGameData(domain: Domain, user: AuthUser): Promise<Result> {
   if (!user) {
-    const fallback = domain === "profile" ? null : [];
+    const fallback = domain === "profile" || domain === "inventory" ? null : [];
     return { ok: true, source: "local", data: readLocal(LOCAL_KEYS[domain], fallback) };
   }
 
@@ -122,6 +125,8 @@ export async function loadGameData(domain: Domain, user: AuthUser): Promise<Resu
       return readTopics(user.id);
     case "history":
       return readHistory(user.id);
+    case "inventory":
+      return readInventory(user.id);
   }
 }
 
@@ -136,8 +141,9 @@ export async function syncLocalToDB(user: { id: string }) {
   const cachedDebotIds = readLocal<string[]>(LOCAL_KEYS.debots, []);
   const cachedTopics = readLocal<any[]>(LOCAL_KEYS.topics, []);
   const cachedHistory = readLocal<any[]>(LOCAL_KEYS.history, []);
+  const cachedInventory = readLocal<any>(LOCAL_KEYS.inventory, null);
 
-  const migrated = { profile: false, debots: 0, topics: 0, matches: 0 };
+  const migrated = { profile: false, debots: 0, topics: 0, matches: 0, inventory: false };
   const errors: any[] = [];
 
   if (cachedProfile) {
@@ -148,6 +154,19 @@ export async function syncLocalToDB(user: { id: string }) {
     if (Object.keys(patch).length) {
       const res = await writeProfile(user.id, patch);
       if (res.ok) migrated.profile = true;
+      else errors.push(res.error);
+    }
+  }
+
+  if (cachedInventory) {
+    const patch: Record<string, any> = {};
+    if (typeof cachedInventory.insightLens === "boolean") patch.insightLens = cachedInventory.insightLens;
+    if (typeof cachedInventory.aceCards === "number") patch.aceCards = cachedInventory.aceCards;
+    if (typeof cachedInventory.acePurchases === "number") patch.acePurchases = cachedInventory.acePurchases;
+    if (typeof cachedInventory.confidencePills === "number") patch.confidencePills = cachedInventory.confidencePills;
+    if (Object.keys(patch).length) {
+      const res = await writeInventory(user.id, patch);
+      if (res.ok) migrated.inventory = true;
       else errors.push(res.error);
     }
   }
@@ -197,6 +216,13 @@ function mergeLocal(domain: Domain, value: any) {
     return { ...existing, ...value };
   }
 
+  if (domain === "inventory") {
+    // Same partial-patch merge as profile — a single row of counters, not
+    // an accumulating list.
+    const existing = readLocal<any>(LOCAL_KEYS.inventory, {});
+    return { ...existing, ...value };
+  }
+
   const existing = readLocal<any[]>(LOCAL_KEYS[domain], []);
 
   if (domain === "debots") {
@@ -239,6 +265,44 @@ async function writeDebotUnlock(userId: string, value: { debotId: any }): Promis
     );
   if (error) return { ok: false, source: "db", error };
   return { ok: true, source: "db" };
+}
+
+// Store items live in a dedicated `user_inventory` table — one row per
+// user, upserted on every purchase/use, mirroring the single-row shape of
+// `profiles` rather than the join-table shape of `user_debots` (items here
+// are stackable counters, not a set of unlocked ids).
+// Expected columns: user_id (pk/unique), insight_lens (bool),
+// ace_cards (int), ace_purchases (int), confidence_pills (int).
+async function writeInventory(userId: string, patch: Record<string, any>): Promise<Result> {
+  const row: Record<string, any> = { user_id: userId };
+  if ("insightLens" in patch) row.insight_lens = patch.insightLens;
+  if ("aceCards" in patch) row.ace_cards = patch.aceCards;
+  if ("acePurchases" in patch) row.ace_purchases = patch.acePurchases;
+  if ("confidencePills" in patch) row.confidence_pills = patch.confidencePills;
+
+  const { error } = await supabase.from("user_inventory").upsert(row, { onConflict: "user_id" });
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db" };
+}
+
+async function readInventory(userId: string): Promise<Result> {
+  const { data, error } = await supabase
+    .from("user_inventory")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) return { ok: false, source: "db", error };
+  if (!data) return { ok: true, source: "db", data: null }; // no row yet — brand new account, defaults apply
+  return {
+    ok: true,
+    source: "db",
+    data: {
+      insightLens: !!data.insight_lens,
+      aceCards: data.ace_cards ?? 0,
+      acePurchases: data.ace_purchases ?? 0,
+      confidencePills: data.confidence_pills ?? 0,
+    },
+  };
 }
 
 async function writeTopic(userId: string, topic: any): Promise<Result> {

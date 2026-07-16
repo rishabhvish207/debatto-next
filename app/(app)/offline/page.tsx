@@ -12,6 +12,7 @@ import { DebucksIcon } from "@/components/ui/DebucksIcon";
 import { DebotStage } from "@/components/arena/DebotStage";
 import { DialogueBox } from "@/components/game/DialogueBox";
 import { InputPanel } from "@/components/game/InputPanel";
+import { ItemsBar } from "@/components/game/ItemsBar";
 import { GAME_CONFIG } from "@/config/Game";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 
@@ -89,6 +90,7 @@ export default function OfflinePage() {
     profile, upProfile,
     battleActive, setBattleActive,
     opps, oppsLoading, unlockDebot,
+    inventory, useAceCard, useConfidencePill,
     topics, topicsLoading, saveCustomTopic,
     pinnedTopicIds, toggleTopicPin, deleteTopic,
     roundOptions, defaultRounds, cheatTapEnabled, requestNavigation, settingsLoaded,
@@ -144,7 +146,6 @@ export default function OfflinePage() {
   const [showHint, setShowHint] = useState(false);
   const [showAns, setShowAns] = useState(false);
   const [ansData, setAnsData] = useState<any>(null);
-  const [ansUsed, setAnsUsed] = useState(0);
   const [pendingOppDamage, setPendingOppDamage] = useState<any>(null);
 
   const textRef = useRef<HTMLTextAreaElement | null>(null);
@@ -230,7 +231,6 @@ export default function OfflinePage() {
   const playerSide = topicSide;
   const oppSide = playerSide === "FOR" ? "AGAINST" : "FOR";
   const curSide = playerSide;
-  const ansCost = GAME_CONFIG.showAnswer.baseCost * Math.pow(2, ansUsed);
   const iStyle = (k: string) => (IMPACT_STYLE as Record<string, typeof IMPACT_STYLE.Ineffective>)[k] || IMPACT_STYLE.Ineffective;
 
   function shakeEl(who: "player" | "opp", dmg: number) {
@@ -292,7 +292,7 @@ export default function OfflinePage() {
     setPHP(100); setOHP(opp.maxHP); setHistory([]); setLastEval(null); setInput(""); 
     setNextOppArg(""); setEmotion("neutral"); setShowAns(false); setAnsData(null);
     setHintsLeft(GAME_CONFIG.hint.perRound); setHintData(null); setShowHint(false);
-    setAnsUsed(0); setPendingOppDamage(null); setApiError("");
+    setPendingOppDamage(null); setApiError("");
     
     setPhase("loading"); setLoadMsg("Preparing opening argument…");
 
@@ -442,9 +442,9 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
     setHistory(prev => [...prev, { round, oppArg, pArg: input, eval: lastEval, net: lastEval.net, oNet: pendingOppDamage.oNet, points: lastEval.dmgDealt ?? lastEval.net, oPoints: pendingOppDamage.dmgDealt ?? pendingOppDamage.oNet }]);
   }
   
-  // ── LIFELINES (Hint & Show Answer) ──
+  // ── LIFELINES (Hint) & ITEMS (Ace Card, Confidence Pill) ──
   async function getHint() {
-    if (hintsLeft <= 0 || phase !== "player-turn") return;
+    if (!inventory.insightLens || hintsLeft <= 0 || phase !== "player-turn") return;
     setHintsLeft(h => h - 1); setPhase("loading"); setLoadMsg("Analysing opponent argument…");
     const sys = `You are a debate coach. Identify logical fallacies and weak points in: "${oppArg}". Return ONLY JSON:
 {"fallacies":[{"type":"name","text":"exact short phrase"}],"weak_points":["phrase1","phrase2"]}`;
@@ -457,10 +457,12 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
     setPhase("player-turn");
   }
 
+  // Ace Card ("Show Answer") — spent from inventory bought in the Store.
+  // No coin cost here; that was already paid at purchase time.
   async function getAns() {
-    if (ansUsed >= GAME_CONFIG.showAnswer.maxUses || profile.coins < ansCost || phase !== "player-turn") return;
-    upProfile({ coins: profile.coins - ansCost });
-    setAnsUsed(u => u + 1);
+    if (phase !== "player-turn" || inventory.aceCards <= 0) return;
+    const ok = await useAceCard();
+    if (!ok) return;
     setPhase("loading"); setLoadMsg("Generating response options…");
     const sys = `You are an expert debate coach. The player (${curSide}) responds to: "${oppArg}". Topic: "${activeTopic?.text}". Return ONLY JSON:
 {"options":[{"label":"Direct Counter","response":"2-3 sentence response","why":"brief reason"},{"label":"Analytical Attack","response":"2-3 sentence response","why":"brief reason"},{"label":"Reframe","response":"2-3 sentence response","why":"brief reason"}]}`;
@@ -471,6 +473,15 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
       setApiError("Failed to generate answers.");
     }
     setPhase("player-turn");
+  }
+
+  // Confidence Pill — instant heal, spent from inventory. No AI call, no
+  // phase change, so it doesn't cost the player a beat mid-argument.
+  async function useConfidencePillItem() {
+    if (phase !== "player-turn") return;
+    const ok = await useConfidencePill();
+    if (!ok) return;
+    setPHP(hp => clamp(hp + GAME_CONFIG.store.confidencePill.healAmount, 0, 100));
   }
 
   // ── ADVANCE TO NEXT ROUND ──
@@ -871,6 +882,16 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
           </div>
         )}
 
+        {/* Items — spend Ace Cards / Confidence Pills bought in the Store */}
+        {phase === "player-turn" && (
+          <ItemsBar
+            aceCards={inventory.aceCards}
+            confidencePills={inventory.confidencePills}
+            onUseAce={getAns}
+            onUseConfidence={useConfidencePillItem}
+          />
+        )}
+
         {/* Input */}
         {phase === "player-turn" && (
           <InputPanel
@@ -880,11 +901,11 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
             isEvaluating={false}
             onHint={getHint}
             hintsLeft={hintsLeft}
-            onAns={getAns}
-            ansCost={ansCost}
-            ansUsed={ansUsed}
-            maxAnsUses={GAME_CONFIG.showAnswer.maxUses}
-            coins={profile.coins}
+            hasInsightLens={inventory.insightLens}
+            curSide={curSide}
+            round={round}
+            rounds={rounds}
+            textRef={textRef}
           />
         )}
       </div>

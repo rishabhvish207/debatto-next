@@ -2,13 +2,11 @@ import React from "react";
 
 export function InputPanel({
   input, setInput, onSend, isEvaluating,
-  onHint, hintsLeft,
-  onAns, ansCost, ansUsed = 0, maxAnsUses = 5, coins,
+  onHint, hintsLeft, hasInsightLens,
   curSide = "", round = 1, rounds = 10,
   textRef
 }: any) {
   const canSubmit = input.trim().length > 8 && !isEvaluating;
-  const ansLeft = maxAnsUses - ansUsed;
 
   return (
     <div className="card" style={{ padding: 14 }}>
@@ -47,17 +45,11 @@ export function InputPanel({
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button
             className="btn btn-amber btn-sm"
-            disabled={hintsLeft <= 0 || isEvaluating}
+            disabled={!hasInsightLens || hintsLeft <= 0 || isEvaluating}
             onClick={onHint}
+            title={!hasInsightLens ? "Buy the Insight Lens in the Store to unlock hints" : undefined}
           >
-            💡 Hint ({hintsLeft})
-          </button>
-          <button
-            className="btn btn-ghost btn-sm"
-            disabled={ansLeft <= 0 || coins < ansCost || isEvaluating}
-            onClick={onAns}
-          >
-            ✦ Show Answer · ❋{ansCost} ({ansLeft} left)
+            {hasInsightLens ? `💡 Hint (${hintsLeft})` : "💡 Hint 🔒"}
           </button>
         </div>
 

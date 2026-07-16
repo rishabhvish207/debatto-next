@@ -17,7 +17,7 @@
 import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { saveGameData, loadGameData, syncLocalToDB, loadPinnedTopics, togglePinnedTopic, deleteTopic as deleteTopicRecord, loadHiddenTopics } from "@/lib/persistenceManager";
-import { GAME_CONFIG } from "@/config/Game";
+import { GAME_CONFIG } from "@/config/Game"; // now also provides GAME_CONFIG.store (insight lens / ace card / confidence pill pricing)
 
 const supabase = createClient();
 const DEFAULT_NAME = GAME_CONFIG.defaultName;
@@ -33,6 +33,15 @@ type Profile = {
   avatar_url?: string | null;
 };
 
+type Inventory = {
+  insightLens: boolean;      // gear — one-time purchase, permanently unlocks the in-match Hint lifeline
+  aceCards: number;          // consumable — "Show Answer", stacks up to store.aceCard.maxStock
+  acePurchases: number;      // total Ace Card purchases ever made — drives the doubling price, never decreases
+  confidencePills: number;   // consumable — heals HP on use, stacks up to store.confidencePill.maxStock
+};
+
+const DEFAULT_INVENTORY: Inventory = { insightLens: false, aceCards: 0, acePurchases: 0, confidencePills: 0 };
+
 type GameContextValue = {
   user: any;
   signInWithGoogle: () => Promise<void>;
@@ -47,6 +56,16 @@ type GameContextValue = {
   oppsLoading: boolean;
   unlockDebot: (debot: any) => Promise<void>;
   refetchDebots: () => Promise<void>;
+
+  inventory: Inventory;
+  inventoryLoading: boolean;
+  aceCardPrice: (purchases?: number) => number;
+  buyInsightLens: () => Promise<void>;
+  buyAceCard: () => Promise<void>;
+  buyConfidencePill: () => Promise<void>;
+  useAceCard: () => Promise<boolean>;
+  useConfidencePill: () => Promise<boolean>;
+  refetchInventory: () => Promise<void>;
 
   topics: any[];
   topicsLoading: boolean;
@@ -350,6 +369,132 @@ export function GameProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  // ── INVENTORY: store items (gear + consumables) ──
+  const [inventory, setInventory] = useState<Inventory>(DEFAULT_INVENTORY);
+  const [inventoryLoading, setInventoryLoading] = useState(true);
+
+  const fetchInventory = async () => {
+    setInventoryLoading(true);
+    const res = await loadGameData("inventory", user);
+    const data: any = res.ok ? res.data : null;
+    setInventory(data ? { ...DEFAULT_INVENTORY, ...data } : DEFAULT_INVENTORY);
+    setInventoryLoading(false);
+  };
+
+  useEffect(() => {
+    fetchInventory();
+  }, [user]);
+
+  // Price of the *next* Ace Card purchase: doubles every purchase ever made
+  // (2, 4, 8, 16, 32, …) and never resets, regardless of how many are
+  // currently held or how many have been used.
+  function aceCardPrice(purchases: number = inventory.acePurchases): number {
+    return GAME_CONFIG.store.aceCard.baseCost * Math.pow(2, purchases);
+  }
+
+  async function buyInsightLens() {
+    if (inventory.insightLens) return; // permanent — nothing to rebuy
+    const cost = GAME_CONFIG.store.insightLens.cost;
+    if (profile.coins < cost) {
+      setApiError("Not enough coins to buy the Insight Lens.");
+      return;
+    }
+    try {
+      const res = await saveGameData("inventory", { insightLens: true }, user);
+      if (!res.ok) {
+        console.error(res.error);
+        setApiError("Failed to purchase Insight Lens. Please try again.");
+        return;
+      }
+      setInventory((inv) => ({ ...inv, insightLens: true }));
+      upProfile({ coins: profile.coins - cost });
+    } catch (err) {
+      console.error(err);
+      setApiError("Failed to purchase Insight Lens. Please try again.");
+    }
+  }
+
+  async function buyAceCard() {
+    const { maxStock } = GAME_CONFIG.store.aceCard;
+    if (inventory.aceCards >= maxStock) {
+      setApiError("Ace Cards are already at max stock.");
+      return;
+    }
+    const cost = aceCardPrice(inventory.acePurchases);
+    if (profile.coins < cost) {
+      setApiError("Not enough coins to buy an Ace Card.");
+      return;
+    }
+    const nextCards = inventory.aceCards + 1;
+    const nextPurchases = inventory.acePurchases + 1;
+    try {
+      const res = await saveGameData("inventory", { aceCards: nextCards, acePurchases: nextPurchases }, user);
+      if (!res.ok) {
+        console.error(res.error);
+        setApiError("Failed to purchase Ace Card. Please try again.");
+        return;
+      }
+      setInventory((inv) => ({ ...inv, aceCards: nextCards, acePurchases: nextPurchases }));
+      upProfile({ coins: profile.coins - cost });
+    } catch (err) {
+      console.error(err);
+      setApiError("Failed to purchase Ace Card. Please try again.");
+    }
+  }
+
+  async function buyConfidencePill() {
+    const { cost, maxStock } = GAME_CONFIG.store.confidencePill;
+    if (inventory.confidencePills >= maxStock) {
+      setApiError("Confidence Pills are already at max stock.");
+      return;
+    }
+    if (profile.coins < cost) {
+      setApiError("Not enough coins to buy a Confidence Pill.");
+      return;
+    }
+    const nextPills = inventory.confidencePills + 1;
+    try {
+      const res = await saveGameData("inventory", { confidencePills: nextPills }, user);
+      if (!res.ok) {
+        console.error(res.error);
+        setApiError("Failed to purchase Confidence Pill. Please try again.");
+        return;
+      }
+      setInventory((inv) => ({ ...inv, confidencePills: nextPills }));
+      upProfile({ coins: profile.coins - cost });
+    } catch (err) {
+      console.error(err);
+      setApiError("Failed to purchase Confidence Pill. Please try again.");
+    }
+  }
+
+  // Spends one from inventory (mid-match, no coin cost — already paid for
+  // at purchase time). Resolves false without changing anything if none
+  // are held, so callers can just `if (!(await useX())) return;`.
+  async function useAceCard(): Promise<boolean> {
+    if (inventory.aceCards <= 0) return false;
+    const next = inventory.aceCards - 1;
+    setInventory((inv) => ({ ...inv, aceCards: next }));
+    const res = await saveGameData("inventory", { aceCards: next }, user);
+    if (!res.ok) {
+      console.error(res.error);
+      setApiError("Failed to sync item use.");
+    }
+    return true;
+  }
+
+  async function useConfidencePill(): Promise<boolean> {
+    if (inventory.confidencePills <= 0) return false;
+    const next = inventory.confidencePills - 1;
+    setInventory((inv) => ({ ...inv, confidencePills: next }));
+    const res = await saveGameData("inventory", { confidencePills: next }, user);
+    if (!res.ok) {
+      console.error(res.error);
+      setApiError("Failed to sync item use.");
+    }
+    return true;
+  }
+
   // ── PINNED TOPICS ──
   useEffect(() => {
     const fetchPinned = async () => {
@@ -522,6 +667,15 @@ export function GameProvider({ children }: { children: ReactNode }) {
         oppsLoading,
         unlockDebot,
         refetchDebots: fetchDebots,
+        inventory,
+        inventoryLoading,
+        aceCardPrice,
+        buyInsightLens,
+        buyAceCard,
+        buyConfidencePill,
+        useAceCard,
+        useConfidencePill,
+        refetchInventory: fetchInventory,
         topics,
         topicsLoading,
         saveCustomTopic,

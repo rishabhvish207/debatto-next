@@ -517,7 +517,7 @@ Return ONLY valid JSON:
           <DebotStage
             opps={opps}
             selectedOpp={opp}
-            onSelect={(o) => setOpp(o)}
+            onSelect={(o: any) => setOpp(o)}
             onUnlock={unlockDebot}
             profile={profile}
           />

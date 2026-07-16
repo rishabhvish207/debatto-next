@@ -150,7 +150,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const signInWithGoogle = async () => {
     await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin },
+      options: { redirectTo: window.location.href },
     });
   };
 
@@ -273,11 +273,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setUser(session?.user || null);
       if (session?.user) {
         if (event === "SIGNED_IN") {
-          const sync = await syncLocalToDB({ id: session.user.id });
-          if (!sync.ok) {
-            console.error(sync.errors);
-            setApiError("Some guest progress failed to sync. Please check your data.");
-          }
+          syncLocalToDB({ id: session.user.id }).then((sync) => {
+            if (!sync.ok) {
+              console.error(sync.errors);
+              setApiError("Some guest progress failed to sync. Please check your data.");
+            }
+          });
         }
         fetchProfile(session.user.id);
       } else {

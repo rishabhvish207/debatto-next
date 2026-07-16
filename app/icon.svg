@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="22" fill="#13141a"/>
+
+  <!-- Two facing speech bubbles (debaters) clashing in the middle -->
+  <path d="M8 22 h46 a10 10 0 0 1 10 10 v20 a10 10 0 0 1 -10 10 h-8 l-10 12 v-12 h-28 a10 10 0 0 1 -10 -10 v-20 a10 10 0 0 1 10 -10 z" fill="#6b9fff"/>
+  <path d="M92 78 h-46 a10 10 0 0 1 -10 -10 v-20 a10 10 0 0 1 10 -10 h8 l10 -12 v12 h28 a10 10 0 0 1 10 10 v20 a10 10 0 0 1 -10 10 z" fill="#ff7070"/>
+
+  <!-- Amber spark where they clash -->
+  <path d="M50 30 L42 52 L50 52 L46 74 L64 46 L54 46 Z" fill="#f5a623" stroke="#13141a" stroke-width="3" stroke-linejoin="round"/>
+</svg>

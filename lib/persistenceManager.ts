@@ -53,6 +53,18 @@ function clearLocal(key: string) {
   window.localStorage.removeItem(key);
 }
 
+/**
+ * Wipes every piece of locally-stored guest progress (profile, unlocked
+ * debots, custom topics, match history, pinned/hidden topic lists). Only
+ * meaningful for guests — logged-in accounts live in Supabase and aren't
+ * touched by this. Callers should reload/reset in-memory state afterward.
+ */
+export function clearAllLocalData() {
+  (Object.keys(LOCAL_KEYS) as Domain[]).forEach((d) => clearLocal(LOCAL_KEYS[d]));
+  clearLocal(PINNED_TOPICS_LOCAL_KEY);
+  clearLocal(HIDDEN_TOPICS_LOCAL_KEY);
+}
+
 // ---------------------------------------------------------------------------
 // Result shape - every write/read returns this so callers can branch on
 // failure the same way regardless of which backend served the request.
@@ -140,20 +152,26 @@ export async function syncLocalToDB(user: { id: string }) {
     }
   }
 
-  for (const debotId of cachedDebotIds) {
-    const res = await writeDebotUnlock(user.id, { debotId });
+  const debotResults = await Promise.all(
+    cachedDebotIds.map((debotId) => writeDebotUnlock(user.id, { debotId }))
+  );
+  for (const res of debotResults) {
     if (res.ok) migrated.debots += 1;
     else errors.push(res.error);
   }
 
-  for (const topic of cachedTopics) {
-    const res = await writeTopic(user.id, topic);
+  const topicResults = await Promise.all(
+    cachedTopics.map((topic) => writeTopic(user.id, topic))
+  );
+  for (const res of topicResults) {
     if (res.ok) migrated.topics += 1;
     else errors.push(res.error);
   }
 
-  for (const match of cachedHistory) {
-    const res = await writeMatch(user.id, match);
+  const matchResults = await Promise.all(
+    cachedHistory.map((match) => writeMatch(user.id, match))
+  );
+  for (const res of matchResults) {
     if (res.ok) migrated.matches += 1;
     else errors.push(res.error);
   }

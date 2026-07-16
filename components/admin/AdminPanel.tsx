@@ -618,6 +618,8 @@ function SettingsAdmin() {
   const [roundsDefault, setRoundsDefault] = useState<number | "">("");
   const [vertices, setVertices] = useState<number | "">("");
   const [cheatEnabled, setCheatEnabled] = useState(true);
+  const [landingBgUrl, setLandingBgUrl] = useState<string | null>(null);
+  const [bgUploading, setBgUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
 
@@ -626,7 +628,7 @@ function SettingsAdmin() {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled", "landing_bg_url"]);
 
     if (error) {
       setStatus(`Failed to load: ${error.message}. Have you run app_settings.sql / debots_redesign.sql yet?`);
@@ -640,10 +642,61 @@ function SettingsAdmin() {
     setRoundsDefault(typeof map.rounds_default === "number" ? map.rounds_default : "");
     setVertices(typeof map.debot_vertices === "number" ? map.debot_vertices : "");
     setCheatEnabled(map.debucks_cheat_enabled !== false);
+    setLandingBgUrl(typeof map.landing_bg_url === "string" ? map.landing_bg_url : null);
     setLoading(false);
   }
 
   useEffect(() => { load(); }, []);
+
+  async function uploadLandingBg(file: File) {
+    setBgUploading(true);
+    setStatus("Uploading…");
+    try {
+      const ext = file.name.split(".").pop() || "png";
+      const path = `landing-bg-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from("site-assets").upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+
+      const { data: pub } = supabase.storage.from("site-assets").getPublicUrl(path);
+      const url = pub.publicUrl;
+
+      const { data: upsertData, error: dbErr } = await supabase
+        .from("app_settings")
+        .upsert([{ key: "landing_bg_url", value: url }], { onConflict: "key" })
+        .select();
+      if (dbErr) throw dbErr;
+      if (!upsertData || upsertData.length === 0) {
+        throw new Error("Update didn't apply — check the 'app_settings' table's write policy allows this admin account.");
+      }
+      setLandingBgUrl(url);
+      setStatus("Background image updated.");
+    } catch (err: any) {
+      setStatus(`Upload failed: ${err.message || err}`);
+    } finally {
+      setBgUploading(false);
+    }
+  }
+
+  async function removeLandingBg() {
+    setBgUploading(true);
+    setStatus("Removing…");
+    try {
+      const { data: upsertData, error: dbErr } = await supabase
+        .from("app_settings")
+        .upsert([{ key: "landing_bg_url", value: null }], { onConflict: "key" })
+        .select();
+      if (dbErr) throw dbErr;
+      if (!upsertData || upsertData.length === 0) {
+        throw new Error("Update didn't apply — check the 'app_settings' table's write policy allows this admin account.");
+      }
+      setLandingBgUrl(null);
+      setStatus("Background image removed.");
+    } catch (err: any) {
+      setStatus(`Remove failed: ${err.message || err}`);
+    } finally {
+      setBgUploading(false);
+    }
+  }
 
   async function save() {
     setStatus("Saving…");
@@ -718,6 +771,21 @@ function SettingsAdmin() {
 
       <button className="btn btn-primary btn-sm" style={{ marginTop: 14 }} onClick={save}>Save settings</button>
       {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 24, marginBottom: 8 }}>
+        Landing Page Background
+      </div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
+        Shown faintly behind the logo on the very first screen, before Enter. Uploads and applies immediately — no need to hit Save settings. Leave empty for a plain background.
+      </div>
+      <SpriteSlot
+        label="Background"
+        url={landingBgUrl}
+        disabled={false}
+        uploading={bgUploading}
+        onFile={(f) => uploadLandingBg(f)}
+        onRemove={landingBgUrl ? () => removeLandingBg() : undefined}
+      />
     </div>
   );
 }

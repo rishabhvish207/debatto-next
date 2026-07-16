@@ -54,7 +54,7 @@ The app expects specific tables, columns, and **Row Level Security policies** in
 - `topics` — debate topics: `title`/`text`, `category`/`cat`, `is_system` (seeded topics vs. user-submitted), `user_id`
 - `pinned_topics` — per-user topic pins: `user_id`, `topic_id`
 - `hidden_topics` — per-user topic removals (used when a user "deletes" a system topic — it's hidden for them, not removed globally): `user_id`, `topic_id`
-- `app_settings` — key/value config the admin panel edits at runtime: `rounds_options`, `rounds_default`, `debot_vertices`, `debucks_cheat_enabled`, `ai_model`, `ai_max_tokens`, `ai_temperature`
+- `app_settings` — key/value config the admin panel edits at runtime: `rounds_options`, `rounds_default`, `debot_vertices`, `debucks_cheat_enabled`, `ai_model`, `ai_max_tokens`, `ai_temperature`, `landing_bg_url` (public URL of the landing page's background image, shown at low opacity behind the logo; empty/absent means no background image)
 
 ### Required RLS policies
 
@@ -108,6 +108,16 @@ create policy "Users can upload their own avatar" on storage.objects for insert 
 create policy "Users can update their own avatar" on storage.objects for update to authenticated
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "Anyone can view avatars" on storage.objects for select using (bucket_id = 'avatars');
+
+-- site-assets: admin uploads only (currently just the landing page background)
+insert into storage.buckets (id, name, public) values ('site-assets', 'site-assets', true)
+  on conflict (id) do nothing;
+
+create policy "Anyone can view site assets" on storage.objects for select using (bucket_id = 'site-assets');
+create policy "Admins can upload site assets" on storage.objects for insert to authenticated
+  with check (bucket_id = 'site-assets' and exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.is_admin = true));
+create policy "Admins can update site assets" on storage.objects for update to authenticated
+  using (bucket_id = 'site-assets' and exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.is_admin = true));
 ```
 
 ### Player ID

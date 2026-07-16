@@ -7,9 +7,9 @@ import { loadGameData } from "@/lib/persistenceManager";
 export default function HistoryPage() {
   const { user, opps, setApiError } = useGame();
 
-  const [matchHistory, setMatchHistory] = useState([]);
+  const [matchHistory, setMatchHistory] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
-  const [expandedMatchId, setExpandedMatchId] = useState(null);
+  const [expandedMatchId, setExpandedMatchId] = useState<any>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -36,9 +36,9 @@ export default function HistoryPage() {
   // Normalizes a match record regardless of whether it came from Supabase
   // (snake_case columns + embedded relations) or a guest's localStorage
   // cache (camelCase, no embed) into one shape the UI can render.
-  function normalizeMatch(m) {
+  function normalizeMatch(m: any) {
     if (!user) {
-      const debot = opps.find((o) => o.id === m.debotId);
+      const debot = opps.find((o: any) => o.id === m.debotId);
       return {
         id: m.id,
         debotName: debot?.name || "Unknown Debot",
@@ -48,7 +48,7 @@ export default function HistoryPage() {
         playerScore: m.playerScore,
         opponentScore: m.opponentScore,
         createdAt: m.createdAt,
-        rounds: (m.rounds || []).map((r) => ({
+        rounds: (m.rounds || []).map((r: any) => ({
           round: r.round,
           pArg: r.pArg,
           oppArg: r.oppArg,
@@ -69,8 +69,8 @@ export default function HistoryPage() {
       createdAt: m.created_at,
       rounds: (m.match_rounds || [])
         .slice()
-        .sort((a, b) => a.round_number - b.round_number)
-        .map((r) => ({
+        .sort((a: any, b: any) => a.round_number - b.round_number)
+        .map((r: any) => ({
           round: r.round_number,
           pArg: r.player_argument,
           oppArg: r.opponent_argument,
@@ -91,7 +91,7 @@ export default function HistoryPage() {
         <div style={{ fontSize: 13, color: "var(--muted)" }}>No matches yet — finish a debate and it'll show up here.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {matchHistory.map((raw) => {
+          {matchHistory.map((raw: any) => {
             const m = normalizeMatch(raw);
             const resultColor = m.result === "win" ? "var(--blue)" : m.result === "loss" ? "var(--red)" : "var(--muted)";
             const resultLabel = m.result === "win" ? "Victory" : m.result === "loss" ? "Defeat" : "Draw";
@@ -126,7 +126,7 @@ export default function HistoryPage() {
                   <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
                     {m.rounds.length === 0 ? (
                       <div style={{ fontSize: 12, color: "var(--muted)" }}>No round detail saved for this match.</div>
-                    ) : m.rounds.map((r, i) => (
+                    ) : m.rounds.map((r: any, i: number) => (
                       <div key={i} style={{ fontSize: 12, background: "var(--faint)", borderRadius: 6, padding: 10 }}>
                         <div style={{ color: "var(--muted)", marginBottom: 4 }}>
                           Round {r.round} {r.impact ? `· ${r.impact}` : ""}

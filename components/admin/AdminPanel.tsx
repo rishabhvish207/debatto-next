@@ -1,5 +1,3 @@
-"use client";
-
 // components/admin/AdminPanel.tsx
 //
 // Renders nothing unless the current profile has is_admin = true. The flag

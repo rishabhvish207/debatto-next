@@ -1,5 +1,3 @@
-"use client";
-
 // Generic centered confirm modal — used instead of window.confirm()/alert()
 // anywhere the app needs to ask "are you sure?" (e.g. leaving a match
 // mid-debate via the global Back button or the in-battle Exit button).

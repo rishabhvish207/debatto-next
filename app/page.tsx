@@ -1,13 +1,9 @@
-"use client";
-
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 // The pure landing screen — deliberately outside the (app) route group, so
 // it gets none of the TopBar/RightDrawer chrome. The three-dot menu only
 // starts existing once you're past this screen, inside /hub and beyond.
 export default function LandingPage() {
-  const router = useRouter();
-
   return (
     <div className="root" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 16px" }}>
       <div style={{ maxWidth: 440, width: "100%", textAlign: "center" }}>
@@ -22,9 +18,9 @@ export default function LandingPage() {
           It's about being <span style={{ color: "var(--text)", fontWeight: 600 }}>logical.</span>
         </p>
 
-        <button className="btn btn-primary btn-lg" style={{ width: "100%" }} onClick={() => router.push("/hub")}>
+        <Link href="/hub" className="btn btn-primary btn-lg" style={{ width: "100%" }}>
           Enter →
-        </button>
+        </Link>
       </div>
     </div>
   );

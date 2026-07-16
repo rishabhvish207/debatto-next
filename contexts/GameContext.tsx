@@ -281,7 +281,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         }
         fetchProfile(session.user.id);
       } else {
-        setProfile({ name: "Guest", coins: 20, wins: 0, is_admin: false });
+        setProfile({ name: DEFAULT_NAME, coins: GAME_CONFIG.economy.startingCoins, wins: 0, is_admin: false });
       }
     });
 

@@ -4,8 +4,8 @@ import React from "react";
 export function WeakText({ text, weakPoints, fallacies }: { text: string, weakPoints: string[], fallacies: any[] }) {
   if (!text) return null;
   const markers = [
-    ...(weakPoints || []).map(t => ({ text: t, kind: "weak" })),
-    ...(fallacies || []).map(f => ({ text: f.text, kind: "fallacy", label: f.type })),
+    ...(weakPoints || []).map((t: string) => ({ text: t, kind: "weak" })),
+    ...(fallacies || []).map((f: any) => ({ text: f.text, kind: "fallacy", label: f.type })),
   ].filter(m => m.text?.trim());
   
   if (!markers.length) return <span>{text}</span>;

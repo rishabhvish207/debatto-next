@@ -18,9 +18,9 @@ import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 /* ═══════════════════════════════════════════════════════════
    STATIC DATA & UTILS
 ═══════════════════════════════════════════════════════════ */
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-function extractJSON(raw) {
+function extractJSON(raw: string) {
   const s = raw.trim().replace(/^```json\n?/, "").replace(/^```\n?/, "").replace(/\n?```$/, "").trim();
   const a = s.indexOf("{"), b = s.lastIndexOf("}");
   return (a !== -1 && b !== -1) ? s.slice(a, b + 1) : s;
@@ -34,7 +34,7 @@ function extractJSON(raw) {
  * only flags input that clearly isn't a real argument so we can zero the
  * gain locally regardless of what the model returned.
  */
-function isLowEffortInput(text) {
+function isLowEffortInput(text: string) {
   const trimmed = (text || "").trim();
   const words = trimmed.split(/\s+/).filter(Boolean);
   if (words.length < 4) return true; // too short to make an actual point
@@ -61,7 +61,7 @@ function isLowEffortInput(text) {
  * label into concrete instructions for both how the debot argues and how
  * strictly the judge should grade the matchup.
  */
-function getDifficultyGuidance(diff) {
+function getDifficultyGuidance(diff: string) {
   const key = (diff || "").toLowerCase();
   if (key.includes("beginner") || key.includes("easy")) {
     return "DIFFICULTY: Beginner. Argue in a genuinely weaker way — simple points, occasional shaky logic or an easy-to-exploit assumption, shorter reasoning chains. Don't be incoherent, just unpolished and beatable. As judge, grade the PLAYER generously: reward reasonable rebuttals, don't nitpick minor imprecision.";
@@ -95,11 +95,11 @@ export default function OfflinePage() {
     apiError, setApiError,
   } = useGame();
 
-  const [page, setPage] = useState("setup");
+  const [page, setPage] = useState<"setup" | "battle" | "result">("setup");
 
   // Setup State
-  const [opp, setOpp] = useState(null);
-  const [topic, setTopic] = useState(null);
+  const [opp, setOpp] = useState<any>(null);
+  const [topic, setTopic] = useState<any>(null);
   const [topicSide, setTopicSide] = useState("FOR");
   const [customT, setCustomT] = useState("");
   const [useCustom, setUseCustom] = useState(false);
@@ -107,10 +107,10 @@ export default function OfflinePage() {
   const [rounds, setRounds] = useState(defaultRounds);
   const [savingTopic, setSavingTopic] = useState(false);
   const [aiSearching, setAiSearching] = useState(false);
-  const [aiSuggestions, setAiSuggestions] = useState(null);
-  const [savedSuggestionIdx, setSavedSuggestionIdx] = useState([]);
-  const [topicMenuOpenId, setTopicMenuOpenId] = useState(null);
-  const [topicDeleteConfirmId, setTopicDeleteConfirmId] = useState(null);
+  const [aiSuggestions, setAiSuggestions] = useState<any[] | null>(null);
+  const [savedSuggestionIdx, setSavedSuggestionIdx] = useState<number[]>([]);
+  const [topicMenuOpenId, setTopicMenuOpenId] = useState<any>(null);
+  const [topicDeleteConfirmId, setTopicDeleteConfirmId] = useState<any>(null);
 
   // defaultRounds starts as the GAME_CONFIG fallback and updates once
   // GameContext's app_settings fetch resolves — keep in sync in case that
@@ -128,30 +128,30 @@ export default function OfflinePage() {
   const [oHP, setOHP] = useState(100);
   const [pPts, setPPts] = useState(0);
   const [oPts, setOPts] = useState(0);
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState<any[]>([]);
 
   // Phases: "idle" | "loading" | "player-turn" | "evaluating" | "player-scored" | "opponent-scored"
   const [phase, setPhase] = useState("idle");
   const [loadMsg, setLoadMsg] = useState("");
-  const [lastEval, setLastEval] = useState(null);
+  const [lastEval, setLastEval] = useState<any>(null);
   const [emotion, setEmotion] = useState("neutral");
   const [shakeP, setShakeP] = useState(false);
   const [shakeO, setShakeO] = useState(false);
-  const [dmgFloat, setDmgFloat] = useState(null);
+  const [dmgFloat, setDmgFloat] = useState<{ val: number; who: "player" | "opp" } | null>(null);
 
   const [hintsLeft, setHintsLeft] = useState(GAME_CONFIG.hint.perRound);
-  const [hintData, setHintData] = useState(null);
+  const [hintData, setHintData] = useState<any>(null);
   const [showHint, setShowHint] = useState(false);
   const [showAns, setShowAns] = useState(false);
-  const [ansData, setAnsData] = useState(null);
+  const [ansData, setAnsData] = useState<any>(null);
   const [ansUsed, setAnsUsed] = useState(0);
-  const [pendingOppDamage, setPendingOppDamage] = useState(null);
+  const [pendingOppDamage, setPendingOppDamage] = useState<any>(null);
 
-  const textRef = useRef(null);
+  const textRef = useRef<HTMLTextAreaElement | null>(null);
 
   // ── EASTER EGG: 5 consecutive taps on the Debucks counter -> 10,000 ──
   const coinTapCountRef = useRef(0);
-  const coinTapTimerRef = useRef(null);
+  const coinTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function handleCoinTap() {
     if (!cheatTapEnabled) return;
@@ -222,18 +222,18 @@ export default function OfflinePage() {
 
   // Derived
   const visibleTopics = topics
-    .filter(t => t.text.toLowerCase().includes(topicSearch.toLowerCase()) || t.cat.toLowerCase().includes(topicSearch.toLowerCase()))
+    .filter((t: any) => t.text.toLowerCase().includes(topicSearch.toLowerCase()) || t.cat.toLowerCase().includes(topicSearch.toLowerCase()))
     .slice()
-    .sort((a, b) => (pinnedTopicIds.includes(b.id) ? 1 : 0) - (pinnedTopicIds.includes(a.id) ? 1 : 0));
+    .sort((a: any, b: any) => (pinnedTopicIds.includes(b.id) ? 1 : 0) - (pinnedTopicIds.includes(a.id) ? 1 : 0));
 
   const activeTopic = useCustom && customT.trim() ? { text: customT.trim(), cat: "Custom" } : topic;
   const playerSide = topicSide;
   const oppSide = playerSide === "FOR" ? "AGAINST" : "FOR";
   const curSide = playerSide;
   const ansCost = GAME_CONFIG.showAnswer.baseCost * Math.pow(2, ansUsed);
-  const iStyle = k => IMPACT_STYLE[k] || IMPACT_STYLE.Ineffective;
+  const iStyle = (k: string) => (IMPACT_STYLE as Record<string, typeof IMPACT_STYLE.Ineffective>)[k] || IMPACT_STYLE.Ineffective;
 
-  function shakeEl(who, dmg) {
+  function shakeEl(who: "player" | "opp", dmg: number) {
     if (who === "opp") { setShakeO(true); setTimeout(() => setShakeO(false), 420); }
     else { setShakeP(true); setTimeout(() => setShakeP(false), 420); }
     setDmgFloat({ val: dmg, who });
@@ -278,7 +278,7 @@ export default function OfflinePage() {
   }
 
   // ── EMOTIONAL CONTEXT GENERATOR ──
-  function getEmotionalContext(currentOPts, currentPPts) {
+  function getEmotionalContext(currentOPts: number, currentPPts: number) {
     const diff = currentOPts - currentPPts;
     if (diff > 15) return "You are winning by a large margin. Act highly confident, triumphant, and slightly dismissive.";
     if (diff < -15) return "You are losing badly. Act defensive, frustrated, or desperate depending on your persona.";
@@ -564,7 +564,7 @@ Return ONLY valid JSON:
             </div>
             {aiSuggestions.length === 0 ? (
               <div style={{ fontSize: 12, color: "var(--muted)" }}>No suggestions came back — try a different phrase.</div>
-            ) : aiSuggestions.map((s, i) => (
+            ) : aiSuggestions.map((s: any, i: number) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13 }}>{s.text}</div>
@@ -592,7 +592,7 @@ Return ONLY valid JSON:
         <div style={{ display: "flex", flexDirection: "column", gap: 7, marginBottom: 10, maxHeight: 240, overflowY: "auto" }}>
           {topicsLoading ? (
             <p style={{ color: "var(--muted)", fontSize: 13 }}>Loading topics…</p>
-          ) : visibleTopics.map((t, i) => {
+          ) : visibleTopics.map((t: any, i: number) => {
             const sel = !useCustom && topic?.id === t.id;
             const pinned = pinnedTopicIds.includes(t.id);
             const prevPinned = i > 0 && pinnedTopicIds.includes(visibleTopics[i - 1].id);
@@ -811,7 +811,7 @@ Return ONLY valid JSON:
              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
               <div>
                 <div className="anim-pop heading" style={{ fontSize: 28, color: iStyle(lastEval.impact).color, marginBottom: 6 }}>{lastEval.impact} Strike</div>
-                <div style={{ display: "flex", gap: 5 }}>{lastEval.tags?.map((t, i) => <span key={i} className="badge" style={{ background: "var(--surface2)", fontSize: 11 }}>{t}</span>)}</div>
+                <div style={{ display: "flex", gap: 5 }}>{lastEval.tags?.map((t: any, i: number) => <span key={i} className="badge" style={{ background: "var(--surface2)", fontSize: 11 }}>{t}</span>)}</div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--blue)" }}>+{lastEval.net} Pts</div>
@@ -845,8 +845,8 @@ Return ONLY valid JSON:
               <span style={{ fontSize: 12, color: "var(--amber)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>💡 Hint</span>
               <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setShowHint(false)}>×</button>
             </div>
-            {hintData.fallacies?.map((f, i) => <div key={i} style={{ fontSize: 12, color: "var(--red)", marginBottom: 4 }}>⚠ <b>{f.type}</b>: "{f.text}"</div>)}
-            {hintData.weak_points?.map((wp, i) => <div key={i} style={{ fontSize: 12, color: "var(--amber)", marginBottom: 4 }}>↗ "{wp}"</div>)}
+            {hintData.fallacies?.map((f: any, i: number) => <div key={i} style={{ fontSize: 12, color: "var(--red)", marginBottom: 4 }}>⚠ <b>{f.type}</b>: "{f.text}"</div>)}
+            {hintData.weak_points?.map((wp: any, i: number) => <div key={i} style={{ fontSize: 12, color: "var(--amber)", marginBottom: 4 }}>↗ "{wp}"</div>)}
           </div>
         )}
 
@@ -857,7 +857,7 @@ Return ONLY valid JSON:
               <span style={{ fontSize: 12, color: "var(--blue)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>✦ Suggested Responses</span>
               <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setShowAns(false)}>×</button>
             </div>
-            {ansData.map((opt, i) => (
+            {ansData.map((opt: any, i: number) => (
               <div key={i} style={{ marginBottom: 10, padding: 12, background: "var(--surface2)", borderRadius: 6, borderLeft: "2px solid var(--blue)" }}>
                 <div style={{ fontSize: 12, color: "var(--blue)", fontWeight: 600, marginBottom: 4 }}>{opt.label}</div>
                 <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.65, marginBottom: 5 }}>{opt.response}</div>
@@ -915,7 +915,7 @@ Return ONLY valid JSON:
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
           {history.length === 0 ? (
             <div style={{ fontSize: 13, color: "var(--muted)" }}>No round detail recorded for this match.</div>
-          ) : history.map((h, i) => {
+          ) : history.map((h: any, i: number) => {
             const impact = h.eval?.impact || "Ineffective";
             const style = iStyle(impact);
             return (
@@ -941,7 +941,7 @@ Return ONLY valid JSON:
 
                 {h.eval?.fallacies?.length > 0 && (
                   <div style={{ marginBottom: 8 }}>
-                    {h.eval.fallacies.map((f, fi) => (
+                    {h.eval.fallacies.map((f: any, fi: number) => (
                       <div key={fi} style={{ fontSize: 11, color: "var(--red)" }}>⚠ <b>{f.type}</b>: "{f.text}"</div>
                     ))}
                   </div>

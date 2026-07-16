@@ -4,9 +4,9 @@ import React from "react";
 export function WeakText({ text, weakPoints, fallacies }: { text: string, weakPoints: string[], fallacies: any[] }) {
   if (!text) return null;
   const markers = [
-    ...(weakPoints || []).map((t: string) => ({ text: t, kind: "weak" })),
-    ...(fallacies || []).map((f: any) => ({ text: f.text, kind: "fallacy", label: f.type })),
-  ].filter(m => m.text?.trim());
+    ...(weakPoints || []).map((t: string) => ({ text: t, kind: "weak" as const })),
+    ...(fallacies || []).map((f: any) => ({ text: f.text, kind: "fallacy" as const, label: f.type })),
+  ].filter((m) => m.text?.trim());
   
   if (!markers.length) return <span>{text}</span>;
   
@@ -19,7 +19,7 @@ export function WeakText({ text, weakPoints, fallacies }: { text: string, weakPo
         if (!m) return <span key={i}>{p}</span>;
         const isF = m.kind === "fallacy";
         return (
-          <span key={i} title={isF ? `Fallacy: ${m.label}` : "Weak point — attack this"}
+          <span key={i} title={m.kind === "fallacy" ? `Fallacy: ${m.label}` : "Weak point — attack this"}
             style={{
               background: isF ? "rgba(255,112,112,0.18)" : "rgba(245,166,35,0.18)",
               color: isF ? "var(--red)" : "var(--amber)",

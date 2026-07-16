@@ -228,9 +228,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
       setProfile((p) => ({ ...p, avatar_url: null }));
       // Best-effort storage cleanup — the DB clearing is what actually matters for display.
-      supabase.storage.from("avatars").list(user.id).then(({ data: files }) => {
+      supabase.storage.from("avatars").list(user.id).then(({ data: files }: { data: any }) => {
         if (files?.length) {
-          supabase.storage.from("avatars").remove(files.map((f) => `${user.id}/${f.name}`));
+          supabase.storage.from("avatars").remove(files.map((f: any) => `${user.id}/${f.name}`));
         }
       }).catch(() => {});
       return { ok: true };
@@ -269,7 +269,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     };
     getSession();
 
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event: any, session: any) => {
       setUser(session?.user || null);
       if (session?.user) {
         if (event === "SIGNED_IN") {

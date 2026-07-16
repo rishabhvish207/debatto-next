@@ -744,7 +744,7 @@ Return ONLY valid JSON:
 
         {/* Fighters */}
         {(() => {
-          const OPP_HEX = {
+          const OPP_HEX: Record<number, string> = {
             1:"#5dbb8a",2:"#2dd4bf",3:"#6b9fff",4:"#a78bfa",5:"#f5a623",6:"#38bdf8",
             7:"#ff7070",8:"#e879f9",9:"#fb923c",10:"#6b6b84",11:"#005dce",12:"#c084fc"
           };
@@ -874,7 +874,7 @@ Return ONLY valid JSON:
             input={input}
             setInput={setInput}
             onSend={submitArg}
-            isEvaluating={phase === "evaluating"}
+            isEvaluating={false}
             onHint={getHint}
             hintsLeft={hintsLeft}
             onAns={getAns}

@@ -10,9 +10,10 @@
 // debot-sprites bucket — a client-side check can be bypassed by anyone
 // calling the API directly, RLS cannot.
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useGame } from "@/contexts/GameContext";
+import { callAI } from "@/lib/ai";
 
 const supabase = createClient();
 
@@ -21,6 +22,91 @@ type AdminPanelProps = {
 };
 
 const EMOTIONS = ["confident", "angry", "shocked", "neutral", "defeated"];
+
+function reorderArray<T>(arr: T[], from: number, to: number): T[] {
+  const copy = [...arr];
+  const [moved] = copy.splice(from, 1);
+  copy.splice(to, 0, moved);
+  return copy;
+}
+
+// Persists the new order as consecutive sort_order values (0, 1, 2, ...)
+// matching each row's index in the reordered array.
+async function persistSortOrder(table: "debots" | "topics", orderedIds: any[]) {
+  await Promise.all(
+    orderedIds.map((id, idx) => supabase.from(table).update({ sort_order: idx }).eq("id", id))
+  );
+}
+
+// Hold-and-drag reordering via Pointer Events rather than native HTML5
+// drag-and-drop — native DnD doesn't fire reliably from touch/hold gestures
+// on phones, and this admin panel is used from mobile as much as desktop.
+// The dragged row floats and follows the finger/cursor (via transform, so no
+// layout reflow happens mid-drag); the actual array reorder is computed and
+// committed once, on release, against the other rows' static positions.
+function useDragReorder(onCommit: (from: number, to: number) => void) {
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [dragDy, setDragDy] = useState(0);
+  const startY = useRef(0);
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  function setRowRef(i: number) {
+    return (el: HTMLDivElement | null) => { rowRefs.current[i] = el; };
+  }
+
+  function onPointerDown(i: number, e: React.PointerEvent) {
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    setDragIndex(i);
+    setHoverIndex(i);
+    startY.current = e.clientY;
+    setDragDy(0);
+  }
+
+  function onPointerMove(e: React.PointerEvent) {
+    if (dragIndex === null) return;
+    setDragDy(e.clientY - startY.current);
+    let best = dragIndex, bestDist = Infinity;
+    rowRefs.current.forEach((el, i) => {
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      const dist = Math.abs(e.clientY - mid);
+      if (dist < bestDist) { bestDist = dist; best = i; }
+    });
+    setHoverIndex(best);
+  }
+
+  function onPointerUp() {
+    if (dragIndex !== null && hoverIndex !== null && hoverIndex !== dragIndex) {
+      onCommit(dragIndex, hoverIndex);
+    }
+    setDragIndex(null);
+    setHoverIndex(null);
+    setDragDy(0);
+  }
+
+  function rowStyle(i: number): React.CSSProperties {
+    if (dragIndex === i) {
+      return { position: "relative", zIndex: 5, transform: `translateY(${dragDy}px)`, boxShadow: "0 6px 18px rgba(0,0,0,.45)", cursor: "grabbing" };
+    }
+    if (hoverIndex === i && dragIndex !== null) {
+      return { borderTop: "2px solid var(--blue)" };
+    }
+    return {};
+  }
+
+  const handleProps = (i: number) => ({
+    onPointerDown: (e: React.PointerEvent) => onPointerDown(i, e),
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel: onPointerUp,
+    style: { cursor: "grab", touchAction: "none", padding: "2px 6px", color: "var(--muted)", fontSize: 16, lineHeight: 1, userSelect: "none" as const },
+  });
+
+  return { setRowRef, rowStyle, handleProps, dragging: dragIndex !== null };
+}
 
 export function AdminPanel({ profile }: AdminPanelProps) {
   const [tab, setTab] = useState<"debots" | "topics" | "settings" | "ai">("debots");
@@ -109,13 +195,20 @@ function DebotsAdmin() {
 
   async function load() {
     setLoading(true);
-    const { data, error } = await supabase.from("debots").select("*").order("id", { ascending: true });
+    const { data, error } = await supabase.from("debots").select("*").order("sort_order", { ascending: true, nullsFirst: false }).order("id", { ascending: true });
     if (error) setStatus(`Failed to load: ${error.message}`);
     else setDebots(data || []);
     setLoading(false);
   }
 
   useEffect(() => { load(); }, []);
+
+  async function commitReorder(from: number, to: number) {
+    const newList = reorderArray(debots, from, to);
+    setDebots(newList);
+    await persistSortOrder("debots", newList.map((d) => d.id));
+  }
+  const reorder = useDragReorder(commitReorder);
 
   function startEdit(d: any) {
     setConfirmingDeleteId(null);
@@ -398,8 +491,9 @@ function DebotsAdmin() {
         <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
-          {debots.map((d) => (
-            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)" }}>
+          {debots.map((d, i) => (
+            <div key={d.id} ref={reorder.setRowRef(i)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", ...reorder.rowStyle(i) }}>
+              <span {...reorder.handleProps(i)}>⠿</span>
               <span style={{ width: 10, height: 10, borderRadius: 3, background: d.color, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.name}</div>
@@ -504,6 +598,7 @@ function TopicsAdmin() {
       .from("topics")
       .select("*")
       .eq("is_system", true)
+      .order("sort_order", { ascending: true, nullsFirst: false })
       .order("id", { ascending: false });
     if (error) setStatus(`Failed to load: ${error.message}`);
     else setTopics(data || []);
@@ -511,6 +606,13 @@ function TopicsAdmin() {
   }
 
   useEffect(() => { load(); }, []);
+
+  async function commitReorder(from: number, to: number) {
+    const newList = reorderArray(topics, from, to);
+    setTopics(newList);
+    await persistSortOrder("topics", newList.map((t) => t.id));
+  }
+  const reorder = useDragReorder(commitReorder);
 
   async function addTopic() {
     if (!newText.trim() || !newCat.trim()) return;
@@ -569,8 +671,8 @@ function TopicsAdmin() {
         <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 300, overflowY: "auto" }}>
-          {topics.map((t) => (
-            <div key={t.id} style={{ padding: "8px 10px", borderRadius: 6, background: "var(--faint)" }}>
+          {topics.map((t, i) => (
+            <div key={t.id} ref={reorder.setRowRef(i)} style={{ padding: "8px 10px", borderRadius: 6, background: "var(--faint)", ...reorder.rowStyle(i) }}>
               {editingId === t.id ? (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                   <input className="input-field" value={editText} onChange={(e) => setEditText(e.target.value)} style={{ flex: "1 1 200px" }} />
@@ -580,6 +682,7 @@ function TopicsAdmin() {
                 </div>
               ) : (
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span {...reorder.handleProps(i)}>⠿</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</div>
                     <div style={{ fontSize: 11, color: "var(--muted)" }}>{t.category}</div>
@@ -619,6 +722,7 @@ function SettingsAdmin() {
   const [vertices, setVertices] = useState<number | "">("");
   const [cheatEnabled, setCheatEnabled] = useState(true);
   const [landingBgUrl, setLandingBgUrl] = useState<string | null>(null);
+  const [bgOpacity, setBgOpacity] = useState(0.16);
   const [bgUploading, setBgUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
@@ -628,7 +732,7 @@ function SettingsAdmin() {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled", "landing_bg_url"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity"]);
 
     if (error) {
       setStatus(`Failed to load: ${error.message}. Have you run app_settings.sql / debots_redesign.sql yet?`);
@@ -643,6 +747,7 @@ function SettingsAdmin() {
     setVertices(typeof map.debot_vertices === "number" ? map.debot_vertices : "");
     setCheatEnabled(map.debucks_cheat_enabled !== false);
     setLandingBgUrl(typeof map.landing_bg_url === "string" ? map.landing_bg_url : null);
+    setBgOpacity(typeof map.landing_bg_opacity === "number" ? map.landing_bg_opacity : 0.16);
     setLoading(false);
   }
 
@@ -674,6 +779,20 @@ function SettingsAdmin() {
       setStatus(`Upload failed: ${err.message || err}`);
     } finally {
       setBgUploading(false);
+    }
+  }
+
+  async function saveBgOpacity(value: number) {
+    const clamped = Math.max(0, Math.min(1, value));
+    try {
+      const { error: dbErr } = await supabase
+        .from("app_settings")
+        .upsert([{ key: "landing_bg_opacity", value: clamped }], { onConflict: "key" })
+        .select();
+      if (dbErr) throw dbErr;
+      setStatus("Background opacity updated.");
+    } catch (err: any) {
+      setStatus(`Opacity save failed: ${err.message || err}`);
     }
   }
 
@@ -786,6 +905,25 @@ function SettingsAdmin() {
         onFile={(f) => uploadLandingBg(f)}
         onRemove={landingBgUrl ? () => removeLandingBg() : undefined}
       />
+      <div style={{ marginTop: 14 }}>
+        <label style={{ display: "block", fontSize: 11, color: "var(--muted)" }}>
+          Background opacity ({Math.round(bgOpacity * 100)}%)
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={bgOpacity}
+            onChange={(e) => setBgOpacity(Number(e.target.value))}
+            onMouseUp={(e) => saveBgOpacity(Number((e.target as HTMLInputElement).value))}
+            onTouchEnd={(e) => saveBgOpacity(Number((e.target as HTMLInputElement).value))}
+            style={{ display: "block", width: "100%", marginTop: 6, accentColor: "var(--blue)" }}
+          />
+        </label>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+          Applies immediately when you release the slider — no need to hit Save settings.
+        </div>
+      </div>
     </div>
   );
 }
@@ -883,9 +1021,47 @@ function LabeledTextarea({
 }: {
   label: string; value: any; onChange: (v: string) => void;
 }) {
+  const [cleaning, setCleaning] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function handleCleanup() {
+    const text = (value ?? "").trim();
+    if (!text || cleaning) return;
+    setCleaning(true);
+    setErr("");
+    try {
+      const sys = `You fix grammar, spelling, and sentence structure in short character-description text for a debate game's admin panel. Rules:
+- Preserve the original meaning, tone, facts, and voice exactly — this describes a specific debot character.
+- Only fix grammar, spelling, punctuation, and awkward/broken sentence structure.
+- Do not add new facts, embellish, change the personality being described, or make it longer than necessary.
+- Do not wrap the output in quotes or markdown. Return ONLY the corrected text, nothing else — no preamble, no explanation.`;
+      const result = await callAI(sys, text);
+      const cleaned = result.trim().replace(/^["']|["']$/g, "");
+      if (cleaned) onChange(cleaned);
+    } catch (e: any) {
+      setErr(e?.message || "Cleanup failed");
+    }
+    setCleaning(false);
+  }
+
   return (
     <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>
-      {label}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span>{label}</span>
+        <button
+          type="button"
+          onClick={handleCleanup}
+          disabled={cleaning || !(value ?? "").trim()}
+          style={{
+            fontSize: 10, padding: "2px 8px", borderRadius: 5,
+            border: "1px solid var(--border)", background: "var(--surface2)",
+            color: cleaning ? "var(--muted)" : "var(--blue)",
+            cursor: cleaning ? "default" : "pointer", opacity: !(value ?? "").trim() ? 0.5 : 1,
+          }}
+        >
+          {cleaning ? "Cleaning…" : "✨ Clean up"}
+        </button>
+      </div>
       <textarea
         className="input-field"
         value={value ?? ""}
@@ -893,6 +1069,7 @@ function LabeledTextarea({
         rows={2}
         style={{ display: "block", width: "100%", marginTop: 3, resize: "vertical", fontFamily: "inherit" }}
       />
+      {err && <div style={{ color: "var(--red)", fontSize: 10, marginTop: 2 }}>{err}</div>}
     </label>
   );
 }

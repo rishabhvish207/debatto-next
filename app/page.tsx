@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { getLandingBgUrl } from "@/lib/landingBg";
+import { getLandingBg } from "@/lib/landingBg";
 
 // The pure landing screen — deliberately outside the (app) route group, so
 // it gets none of the TopBar/RightDrawer chrome. The three-dot menu only
 // starts existing once you're past this screen, inside /hub and beyond.
 export default async function LandingPage() {
-  const bgUrl = await getLandingBgUrl();
+  const { url: bgUrl, opacity: bgOpacity } = await getLandingBg();
 
   return (
     <div className="root" style={{ position: "relative", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 16px", overflow: "hidden" }}>
@@ -17,7 +17,7 @@ export default async function LandingPage() {
             backgroundImage: `url(${bgUrl})`,
             backgroundSize: "cover",
             backgroundPosition: "center",
-            opacity: 0.16,
+            opacity: bgOpacity,
             pointerEvents: "none",
           }}
         />

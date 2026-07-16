@@ -292,7 +292,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   // ── DEBOTS: catalog (public) + per-user unlock status ──
   const fetchDebots = async () => {
     setOppsLoading(true);
-    const { data, error } = await supabase.from("debots").select("*").order("id", { ascending: true });
+    const { data, error } = await supabase.from("debots").select("*").order("sort_order", { ascending: true, nullsFirst: false }).order("id", { ascending: true });
 
     if (error) {
       console.error(error);
@@ -430,7 +430,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const fetchTopics = async () => {
       setTopicsLoading(true);
-      let query = supabase.from("topics").select("*");
+      let query = supabase.from("topics").select("*").order("sort_order", { ascending: true, nullsFirst: false });
       query = user
         ? query.or(`is_system.eq.true,user_id.eq.${user.id}`)
         : query.eq("is_system", true);

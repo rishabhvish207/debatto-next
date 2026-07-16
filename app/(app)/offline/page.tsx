@@ -339,22 +339,25 @@ JUDGE RULES — grade like a strict debate judge, not a cheerleader, adjusted fo
 - Before scoring, silently check: does this response engage with "${oppArg}" specifically, and does it make actual sense in English? If either check fails, gain must be 0-5 regardless of length or confident tone.
 - penalty 0-30: deduct for logical fallacies, irrelevance, contradictions, or restating without advancing the argument. Low-effort or nonsensical input should receive a HIGH penalty (20-30), not a low one.
 - impact from net: 35+→Devastating, 25-34→Strong, 14-24→Solid, 5-13→Weak, <5→Ineffective
-- opponent_gain 0-40, opponent_penalty 0-15: evaluate opponent's prior argument independently, by the same strict standard.
-- weak_points: 2-4 SHORT targetable phrases from YOUR new opponent_reply.
+- tags: 2-3 short labels describing the PLAYER's argument specifically (e.g. "Logical Rebuttal", "Weak Evidence", "Ad Hominem") — must match what PLAYER SAID actually contains, never traits of OPPONENT SAID.
+- critique: one honest sentence about PLAYER SAID only. Do not describe or restate OPPONENT SAID's content, reasoning style, or weaknesses here — this field is about the player, not the opponent.
 - fallacies: fallacies in the PLAYER's response only.
+- CHECK BEFORE WRITING gain/penalty/tags/critique/fallacies: re-read PLAYER SAID above. Every one of these five fields must be grounded only in that exact text, never in OPPONENT SAID.
+- opponent_gain 0-40, opponent_penalty 0-15: evaluate opponent's prior argument (OPPONENT SAID) independently, by the same strict standard.
+- weak_points: 2-4 SHORT targetable phrases from YOUR new opponent_reply (the debot's upcoming argument, not the player's).
 
-Return ONLY valid JSON:
+Return ONLY valid JSON. Fill fields in this order so the player evaluation is grounded before you switch back into ${opp.name}'s voice:
 {
-  "opponent_reply": "${isLast ? "Closing statement (2 sentences)" : `Next in-character argument (${opp.argSentences ?? 3} sentences)`}",
   "gain": 0-50,
   "penalty": 0-30,
-  "tags": ["Style","Depth","Quality"],
   "impact": "Ineffective|Weak|Solid|Strong|Devastating",
-  "critique": "One honest sentence about the player's argument.",
-  "fallacies": [{"type":"name","text":"exact phrase"}],
-  "weak_points": ["phrase1","phrase2"],
+  "tags": ["about PLAYER's argument only"],
+  "critique": "One honest sentence about PLAYER SAID only.",
+  "fallacies": [{"type":"name","text":"exact phrase from PLAYER SAID"}],
   "opponent_gain": 0-40,
-  "opponent_penalty": 0-15
+  "opponent_penalty": 0-15,
+  "opponent_reply": "${isLast ? "Closing statement (2 sentences)" : `Next in-character argument (${opp.argSentences ?? 3} sentences)`}",
+  "weak_points": ["phrase1","phrase2"]
 }`;
 
     try {
@@ -375,7 +378,7 @@ Return ONLY valid JSON:
       const calculatedNewOHP = Math.max(0, oHP - Math.floor(net * GAME_CONFIG.damage.playerMultiplier));
       const playerDmgDealt = oHP - calculatedNewOHP;
       setOHP(calculatedNewOHP);
-      setPPts(x => x + net);
+      setPPts(x => x + playerDmgDealt);
       if (net > 8) shakeEl("opp", net);
 
       // Set emotional reaction based on damage taken
@@ -420,7 +423,7 @@ Return ONLY valid JSON:
        // was previously skipped entirely, silently dropping the KO round
        // from both the Result breakdown and the saved match history). No
        // opponent counter-attack since they're already beaten, so oNet is 0.
-       setHistory(prev => [...prev, { round, oppArg, pArg: input, eval: lastEval, net: lastEval.net, oNet: 0 }]);
+       setHistory(prev => [...prev, { round, oppArg, pArg: input, eval: lastEval, net: lastEval.net, oNet: 0, points: lastEval.dmgDealt ?? lastEval.net, oPoints: 0 }]);
        setTimeout(() => { setEmotion("defeated"); setPage("result"); }, 600);
        return;
     }
@@ -430,13 +433,13 @@ Return ONLY valid JSON:
     
     // Apply opponent damage
     setPHP(pendingOppDamage.newPHP);
-    setOPts(x => x + pendingOppDamage.oNet);
+    setOPts(x => x + pendingOppDamage.dmgDealt);
     if (pendingOppDamage.oNet > 10) shakeEl("player", pendingOppDamage.oNet);
 
     if (pendingOppDamage.oNet > 18) setEmotion("confident");
     else setEmotion("neutral");
 
-    setHistory(prev => [...prev, { round, oppArg, pArg: input, eval: lastEval, net: lastEval.net, oNet: pendingOppDamage.oNet }]);
+    setHistory(prev => [...prev, { round, oppArg, pArg: input, eval: lastEval, net: lastEval.net, oNet: pendingOppDamage.oNet, points: lastEval.dmgDealt ?? lastEval.net, oPoints: pendingOppDamage.dmgDealt ?? pendingOppDamage.oNet }]);
   }
   
   // ── LIFELINES (Hint & Show Answer) ──
@@ -814,7 +817,7 @@ Return ONLY valid JSON:
                 <div style={{ display: "flex", gap: 5 }}>{lastEval.tags?.map((t: any, i: number) => <span key={i} className="badge" style={{ background: "var(--surface2)", fontSize: 11 }}>{t}</span>)}</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 16, fontWeight: 600, color: "var(--blue)" }}>+{lastEval.net} Pts</div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: "var(--blue)" }}>+{lastEval.dmgDealt ?? lastEval.net} Pts</div>
                 <div style={{ fontSize: 12, color: "var(--muted)" }}>−{lastEval.dmgDealt ?? lastEval.net} HP</div>
               </div>
             </div>
@@ -829,7 +832,7 @@ Return ONLY valid JSON:
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                <div className="heading" style={{ fontSize: 20, color: "var(--red)" }}>Debot Retaliation</div>
                <div style={{ textAlign: "right" }}>
-                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--red)" }}>+{pendingOppDamage.oNet} Pts</div>
+                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--red)" }}>+{pendingOppDamage.dmgDealt ?? pendingOppDamage.oNet} Pts</div>
                  <div style={{ fontSize: 12, color: "var(--muted)" }}>−{pendingOppDamage.dmgDealt ?? pendingOppDamage.oNet} HP</div>
                </div>
             </div>
@@ -926,8 +929,8 @@ Return ONLY valid JSON:
                     <div style={{ fontSize: 15, fontWeight: 700, color: style.color }}>{impact} Strike</div>
                   </div>
                   <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 13, color: "var(--blue)", fontWeight: 600 }}>+{h.net ?? 0} you</div>
-                    <div style={{ fontSize: 13, color: "var(--red)", fontWeight: 600 }}>+{h.oNet ?? 0} them</div>
+                    <div style={{ fontSize: 13, color: "var(--blue)", fontWeight: 600 }}>+{h.points ?? h.net ?? 0} you</div>
+                    <div style={{ fontSize: 13, color: "var(--red)", fontWeight: 600 }}>+{h.oPoints ?? h.oNet ?? 0} them</div>
                   </div>
                 </div>
 

@@ -267,7 +267,7 @@ function BuyButton({
       style={cantAfford && !disabled ? { background: "transparent", border: "1px solid var(--red)", color: "var(--red)" } : undefined}
       onClick={onBuy}
     >
-      {disabled && disabledLabel ? disabledLabel : cantAfford ? "Not enough" : label}
+      {cantAfford && !disabled ? <>Need · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{cost}</> : disabled && disabledLabel ? disabledLabel : label}
     </button>
   );
 }

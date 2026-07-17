@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getLandingBg } from "@/lib/landingBg";
+import { LandingThemeBg } from "@/components/shell/LandingThemeBg";
 
 // The pure landing screen — deliberately outside the (app) route group, so
 // it gets none of the TopBar/RightDrawer chrome. The three-dot menu only
@@ -24,6 +25,7 @@ export default async function LandingPage() {
     <div className="root" style={{ position: "relative", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 16px", overflow: "hidden" }}>
       {bgUrl && (
         <div
+          id="landing-admin-bg"
           aria-hidden
           style={{
             position: "absolute", inset: 0,
@@ -35,6 +37,7 @@ export default async function LandingPage() {
           }}
         />
       )}
+      <LandingThemeBg />
       <div style={{ position: "relative", maxWidth: 440, width: "100%", textAlign: "center" }}>
         <div style={{ fontSize: 12, letterSpacing: "0.22em", color: "var(--muted)", textTransform: "uppercase", marginBottom: 12, textShadow }}>
           AI Debate System

@@ -1271,6 +1271,8 @@ function SettingsAdmin() {
   const [roundsOptionsText, setRoundsOptionsText] = useState("");
   const [roundsDefault, setRoundsDefault] = useState<number | "">("");
   const [vertices, setVertices] = useState<number | "">("");
+  const [shapeRotation, setShapeRotation] = useState(0);
+  const [diffBadgeStyle, setDiffBadgeStyle] = useState<"badge" | "plain">("badge");
   const [cheatEnabled, setCheatEnabled] = useState(true);
   const [landingBgUrl, setLandingBgUrl] = useState<string | null>(null);
   const [bgOpacity, setBgOpacity] = useState(0.16);
@@ -1286,7 +1288,7 @@ function SettingsAdmin() {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere", "landing_subtext"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debot_shape_rotation", "debot_diff_badge_style", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere", "landing_subtext"]);
 
     if (error) {
       setStatus(`Failed to load: ${error.message}. Have you run app_settings.sql / debots_redesign.sql yet?`);
@@ -1299,6 +1301,8 @@ function SettingsAdmin() {
     setRoundsOptionsText(Array.isArray(map.rounds_options) ? map.rounds_options.join(", ") : "");
     setRoundsDefault(typeof map.rounds_default === "number" ? map.rounds_default : "");
     setVertices(typeof map.debot_vertices === "number" ? map.debot_vertices : "");
+    setShapeRotation(typeof map.debot_shape_rotation === "number" ? map.debot_shape_rotation : 0);
+    setDiffBadgeStyle(map.debot_diff_badge_style === "plain" ? "plain" : "badge");
     setCheatEnabled(map.debucks_cheat_enabled !== false);
     setLandingBgUrl(typeof map.landing_bg_url === "string" ? map.landing_bg_url : null);
     setBgOpacity(typeof map.landing_bg_opacity === "number" ? map.landing_bg_opacity : 0.16);
@@ -1390,13 +1394,15 @@ function SettingsAdmin() {
       { key: "rounds_options", value: parsedOptions },
       { key: "rounds_default", value: Number(roundsDefault) || parsedOptions[0] },
       { key: "debucks_cheat_enabled", value: cheatEnabled },
+      { key: "debot_shape_rotation", value: shapeRotation },
+      { key: "debot_diff_badge_style", value: diffBadgeStyle },
       { key: "bg_apply_everywhere", value: bgApplyEverywhere },
       { key: "landing_subtext", value: landingSubtext.trim() ? landingSubtext : DEFAULT_SUBTEXT },
     ];
     // Vertices is optional — leaving it blank means "let each debot keep its
     // own shape" rather than forcing one on the whole catalog.
     if (vertices !== "") {
-      rows.push({ key: "debot_vertices", value: Math.max(0, Math.min(10, Number(vertices))) });
+      rows.push({ key: "debot_vertices", value: Math.max(0, Math.min(20, Number(vertices))) });
     }
 
     const { data: upsertData, error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" }).select();
@@ -1433,7 +1439,39 @@ function SettingsAdmin() {
       <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
         Applies one vertex count to every debot at once, overriding each debot's individual shape. Leave blank to let each debot keep its own shape.
       </div>
-      <LabeledInput label="Vertices for all debots (0 = circle, blank = per-debot)" value={vertices} onChange={(v) => setVertices(v === "" ? "" : Number(v))} type="number" />
+      <LabeledInput label="Vertices for all debots (0 = circle, 3–20 sides, blank = per-debot)" value={vertices} onChange={(v) => setVertices(v === "" ? "" : Number(v))} type="number" min={0} max={20} />
+
+      <div style={{ marginTop: 14 }}>
+        <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
+          Frame rotation (applies to every debot's shape)
+        </label>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[0, 90, 180, 270].map((deg) => (
+            <button
+              key={deg}
+              type="button"
+              className={`btn btn-sm ${shapeRotation === deg ? "btn-primary" : "btn-ghost"}`}
+              onClick={() => setShapeRotation(deg)}
+            >
+              {deg}°
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
+          Difficulty label style (in the debot selection grid)
+        </label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button type="button" className={`btn btn-sm ${diffBadgeStyle === "badge" ? "btn-primary" : "btn-ghost"}`} onClick={() => setDiffBadgeStyle("badge")}>
+            Badge (background + padding)
+          </button>
+          <button type="button" className={`btn btn-sm ${diffBadgeStyle === "plain" ? "btn-primary" : "btn-ghost"}`} onClick={() => setDiffBadgeStyle("plain")}>
+            Plain text
+          </button>
+        </div>
+      </div>
 
       <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 20, marginBottom: 8 }}>
         Debucks Tap Cheat
@@ -1583,9 +1621,9 @@ function AiSettingsAdmin() {
 // ===========================================================================
 
 function LabeledInput({
-  label, value, onChange, type = "text", step, disabled,
+  label, value, onChange, type = "text", step, disabled, min, max,
 }: {
-  label: string; value: any; onChange: (v: any) => void; type?: string; step?: string; disabled?: boolean;
+  label: string; value: any; onChange: (v: any) => void; type?: string; step?: string; disabled?: boolean; min?: number; max?: number;
 }) {
   return (
     <label style={{ display: "block", fontSize: 11, color: "var(--muted)" }}>
@@ -1594,6 +1632,8 @@ function LabeledInput({
         className="input-field"
         type={type}
         step={step}
+        min={min}
+        max={max}
         disabled={disabled}
         value={value ?? ""}
         onChange={(e) => onChange(type === "number" ? e.target.value : e.target.value)}

@@ -15,6 +15,8 @@ const FALLBACK = {
   model: AI_CONFIG.model,
   maxTokens: AI_CONFIG.maxTokens,
   temperature: AI_CONFIG.temperature,
+  fallbackModel: AI_CONFIG.fallbackModel,
+  fallbackEnabled: AI_CONFIG.fallbackEnabled,
 };
 
 async function getAiSettings() {
@@ -22,7 +24,7 @@ async function getAiSettings() {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["ai_model", "ai_max_tokens", "ai_temperature"]);
+      .in("key", ["ai_model", "ai_max_tokens", "ai_temperature", "ai_fallback_model", "ai_fallback_enabled"]);
 
     if (error || !data) return FALLBACK;
 
@@ -33,10 +35,33 @@ async function getAiSettings() {
       model: map.ai_model ?? FALLBACK.model,
       maxTokens: map.ai_max_tokens ?? FALLBACK.maxTokens,
       temperature: map.ai_temperature ?? FALLBACK.temperature,
+      fallbackModel: map.ai_fallback_model ?? FALLBACK.fallbackModel,
+      fallbackEnabled: map.ai_fallback_enabled !== false, // defaults on
     };
   } catch {
     return FALLBACK;
   }
+}
+
+async function callGroq(model: string, system: string, userMsg: string, maxTokens: number, temperature: number) {
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: userMsg }
+      ],
+      max_tokens: maxTokens,
+      temperature,
+    }),
+  });
+  const data = await res.json();
+  return { ok: res.ok, status: res.status, data };
 }
 
 export async function POST(req: Request) {
@@ -46,32 +71,29 @@ export async function POST(req: Request) {
     // app_settings — admin-adjustable via AdminPanel, but never trusted
     // from whatever the browser happens to send.
     const { system, userMsg } = await req.json();
-    const { model, maxTokens, temperature } = await getAiSettings();
+    const { model, maxTokens, temperature, fallbackModel, fallbackEnabled } = await getAiSettings();
 
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: userMsg }
-        ],
-        max_tokens: maxTokens,
-        temperature,
-      }),
-    });
+    let result = await callGroq(model, system, userMsg, maxTokens, temperature);
+    let modelUsed = model;
 
-    const data = await res.json();
-
-    if (!res.ok) {
-      return NextResponse.json({ error: data?.error?.message || "Groq Error" }, { status: res.status });
+    // 429 = rate limit reached for this model specifically (Groq's limits
+    // are per-model, not account-wide) — retry once against a different
+    // model rather than failing the whole match. Only retries on 429, not
+    // other errors (bad request, auth, etc.), since those would just fail
+    // identically on the fallback model too.
+    if (!result.ok && result.status === 429 && fallbackEnabled && fallbackModel && fallbackModel !== model) {
+      const retry = await callGroq(fallbackModel, system, userMsg, maxTokens, temperature);
+      if (retry.ok) {
+        result = retry;
+        modelUsed = fallbackModel;
+      }
     }
 
-    return NextResponse.json({ result: data.choices?.[0]?.message?.content || "" });
+    if (!result.ok) {
+      return NextResponse.json({ error: result.data?.error?.message || "Groq Error" }, { status: result.status });
+    }
+
+    return NextResponse.json({ result: result.data.choices?.[0]?.message?.content || "", modelUsed });
   } catch (error) {
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }

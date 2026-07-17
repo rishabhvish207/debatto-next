@@ -471,19 +471,21 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
   }
 
   // Ace Card ("Show Answer") — spent from inventory bought in the Store.
-  // No coin cost here; that was already paid at purchase time.
+  // No coin cost here; that was already paid at purchase time. The card is
+  // only actually spent (useAceCard) once the AI call comes back — if Groq
+  // errors or rate-limits, the player keeps their card instead of losing it
+  // for nothing.
   async function getAns() {
     if (phase !== "player-turn" || inventory.aceCards <= 0) return;
-    const ok = await useAceCard();
-    if (!ok) return;
     setPhase("loading"); setLoadMsg("Generating response options…");
     const sys = `You are an expert debate coach. The player (${curSide}) responds to: "${oppArg}". Topic: "${activeTopic?.text}". Return ONLY JSON:
 {"options":[{"label":"Direct Counter","response":"2-3 sentence response","why":"brief reason"},{"label":"Analytical Attack","response":"2-3 sentence response","why":"brief reason"},{"label":"Reframe","response":"2-3 sentence response","why":"brief reason"}]}`;
     try {
       const d = JSON.parse(extractJSON(await callAI(sys, "Give 3 options.")));
       setAnsData(d.options); setShowAns(true);
+      await useAceCard();
     } catch {
-      setApiError("Failed to generate answers.");
+      setApiError("Failed to generate answers. Your Ace Card wasn't spent — try again.");
     }
     setPhase("player-turn");
   }

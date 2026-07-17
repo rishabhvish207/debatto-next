@@ -1556,6 +1556,8 @@ function AiSettingsAdmin() {
   const [model, setModel] = useState("");
   const [maxTokens, setMaxTokens] = useState<number | "">("");
   const [temperature, setTemperature] = useState<number | "">("");
+  const [fallbackModel, setFallbackModel] = useState("");
+  const [fallbackEnabled, setFallbackEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
 
@@ -1564,7 +1566,7 @@ function AiSettingsAdmin() {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["ai_model", "ai_max_tokens", "ai_temperature"]);
+      .in("key", ["ai_model", "ai_max_tokens", "ai_temperature", "ai_fallback_model", "ai_fallback_enabled"]);
 
     if (error) {
       setStatus(`Failed to load: ${error.message}. Have you run app_settings.sql yet?`);
@@ -1577,6 +1579,8 @@ function AiSettingsAdmin() {
     setModel(map.ai_model ?? "");
     setMaxTokens(map.ai_max_tokens ?? "");
     setTemperature(map.ai_temperature ?? "");
+    setFallbackModel(map.ai_fallback_model ?? "llama-3.1-8b-instant");
+    setFallbackEnabled(map.ai_fallback_enabled !== false);
     setLoading(false);
   }
 
@@ -1588,6 +1592,8 @@ function AiSettingsAdmin() {
       { key: "ai_model", value: model },
       { key: "ai_max_tokens", value: Number(maxTokens) || 1000 },
       { key: "ai_temperature", value: Number(temperature) },
+      { key: "ai_fallback_model", value: fallbackModel.trim() },
+      { key: "ai_fallback_enabled", value: fallbackEnabled },
     ];
     const { error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" });
     setStatus(error ? `Failed: ${error.message}` : "Settings saved — takes effect on the next AI call.");
@@ -1609,6 +1615,20 @@ function AiSettingsAdmin() {
         <LabeledInput label="Max tokens" value={maxTokens} onChange={(v) => setMaxTokens(v === "" ? "" : Number(v))} type="number" />
         <LabeledInput label="Temperature" value={temperature} onChange={(v) => setTemperature(v === "" ? "" : Number(v))} type="number" step="0.1" />
       </div>
+
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 22, marginBottom: 8 }}>
+        Rate Limit Fallback
+      </div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+        Groq's free tier caps each model's tokens-per-day separately — the primary model can run out well before you'd expect.
+        When it returns a 429 (rate limited), the server retries once against this fallback model instead of failing the match outright.
+        <code> llama-3.1-8b-instant</code> is a good default: same free tier, much higher daily budget.
+      </div>
+      <LabeledInput label="Fallback model" value={fallbackModel} onChange={setFallbackModel} />
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 10 }}>
+        <input type="checkbox" checked={fallbackEnabled} onChange={(e) => setFallbackEnabled(e.target.checked)} style={{ accentColor: "var(--blue)" }} />
+        Automatically fall back on rate limit
+      </label>
 
       <button className="btn btn-primary btn-sm" style={{ marginTop: 14 }} onClick={save}>Save settings</button>
       {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}

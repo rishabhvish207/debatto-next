@@ -16,7 +16,7 @@ const supabase = createClient();
 
 export type AuthUser = { id: string } | null;
 
-type Domain = "profile" | "debots" | "topics" | "history" | "inventory";
+type Domain = "profile" | "debots" | "topics" | "history" | "inventory" | "themes";
 
 const PINNED_TOPICS_LOCAL_KEY = "debatto:pinned_topics"; // string[] of topic ids, guest-only
 const HIDDEN_TOPICS_LOCAL_KEY = "debatto:hidden_topics"; // string[] of system-topic ids this guest has personally removed
@@ -27,6 +27,7 @@ const LOCAL_KEYS: Record<Domain, string> = {
   topics: "debatto:custom_topics",     // array of custom topic objects
   history: "debatto:match_history",    // array of { debotId, topicText, result, playerScore, opponentScore, rounds }
   inventory: "debatto:inventory",      // { insightLens, aceCards, confidencePills } — store items owned
+  themes: "debatto:unlocked_themes",   // string[] of store_theme ids the guest owns
 };
 
 
@@ -101,7 +102,9 @@ export async function saveGameData(
     case "profile":
       return writeProfile(user.id, value);
     case "debots":
-      return writeDebotUnlock(user.id, value); // value: { debotId: string | number }
+      return writeDebotUnlock(user.id, value);
+    case "themes":
+      return writeThemeUnlock(user.id, value); // value: { themeId: string }
     case "topics":
       return writeTopic(user.id, value); // value: { text, cat, ... }
     case "history":
@@ -125,6 +128,8 @@ export async function loadGameData(domain: Domain, user: AuthUser): Promise<Resu
       return readProfile(user.id);
     case "debots":
       return readUnlockedDebots(user.id);
+    case "themes":
+      return readUnlockedThemes(user.id);
     case "topics":
       return readTopics(user.id);
     case "history":
@@ -143,11 +148,12 @@ export async function loadGameData(domain: Domain, user: AuthUser): Promise<Resu
 export async function syncLocalToDB(user: { id: string }) {
   const cachedProfile = readLocal<any>(LOCAL_KEYS.profile, null);
   const cachedDebotIds = readLocal<string[]>(LOCAL_KEYS.debots, []);
+  const cachedThemeIds = readLocal<string[]>(LOCAL_KEYS.themes, []);
   const cachedTopics = readLocal<any[]>(LOCAL_KEYS.topics, []);
   const cachedHistory = readLocal<any[]>(LOCAL_KEYS.history, []);
   const cachedInventory = readLocal<any>(LOCAL_KEYS.inventory, null);
 
-  const migrated = { profile: false, debots: 0, topics: 0, matches: 0, inventory: false };
+  const migrated = { profile: false, debots: 0, themes: 0, topics: 0, matches: 0, inventory: false };
   const errors: any[] = [];
 
   // Guest progress is additive on top of whatever the account already has —
@@ -196,6 +202,17 @@ export async function syncLocalToDB(user: { id: string }) {
   );
   for (const res of debotResults) {
     if (res.ok) migrated.debots += 1;
+    else errors.push(res.error);
+  }
+
+  // Themes just carry over ownership, same as debots — the account's own
+  // equipped_theme_id (if any) is left alone rather than overwritten by
+  // whatever the guest had equipped locally.
+  const themeResults = await Promise.all(
+    cachedThemeIds.map((themeId) => writeThemeUnlock(user.id, { themeId }))
+  );
+  for (const res of themeResults) {
+    if (res.ok) migrated.themes += 1;
     else errors.push(res.error);
   }
 
@@ -251,6 +268,12 @@ function mergeLocal(domain: Domain, value: any) {
     return existing.includes(id) ? existing : [...existing, id];
   }
 
+  if (domain === "themes") {
+    // value: { themeId }
+    const id = value?.themeId;
+    return existing.includes(id) ? existing : [...existing, id];
+  }
+
   if (domain === "topics") {
     // value: a topic object with a client-generated id
     return [...existing.filter((t: any) => t.id !== value.id), value];
@@ -282,6 +305,19 @@ async function writeDebotUnlock(userId: string, value: { debotId: any }): Promis
     .upsert(
       { user_id: userId, debot_id: value.debotId, unlocked_at: new Date().toISOString() },
       { onConflict: "user_id,debot_id" }
+    );
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db" };
+}
+
+// Same join-table pattern as user_debots — a theme unlocked by one user
+// must not unlock it globally for everyone else.
+async function writeThemeUnlock(userId: string, value: { themeId: any }): Promise<Result> {
+  const { error } = await supabase
+    .from("user_themes")
+    .upsert(
+      { user_id: userId, theme_id: value.themeId, unlocked_at: new Date().toISOString() },
+      { onConflict: "user_id,theme_id" }
     );
   if (error) return { ok: false, source: "db", error };
   return { ok: true, source: "db" };
@@ -395,6 +431,15 @@ async function readUnlockedDebots(userId: string): Promise<Result> {
     .eq("user_id", userId);
   if (error) return { ok: false, source: "db", error };
   return { ok: true, source: "db", data: (data || []).map((r: any) => r.debot_id) };
+}
+
+async function readUnlockedThemes(userId: string): Promise<Result> {
+  const { data, error } = await supabase
+    .from("user_themes")
+    .select("theme_id")
+    .eq("user_id", userId);
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db", data: (data || []).map((r: any) => r.theme_id) };
 }
 
 async function readTopics(userId: string): Promise<Result> {

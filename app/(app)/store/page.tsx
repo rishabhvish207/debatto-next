@@ -1,27 +1,26 @@
 "use client";
 
-// Store — items are bought here with debucks (schema: shop is client-side
-// config for now, purchases persist through GameContext's `inventory` /
-// the `user_inventory` table, mirroring the debots/user_debots pattern).
+// Store — two top-level sections: Items and Themes. Both catalogs are fully
+// admin-editable (Admin → Store) and come from GameContext (which itself
+// falls back to config/Game.ts + config/Themes.ts if the store_items /
+// store_themes tables haven't been migrated yet).
 //
-// Two top-level sections: Themes and Items. Themes has no content yet —
-// it's deliberately kept as an empty, ready-to-fill tab (see THEMES below)
-// so adding real theme items later doesn't require touching the section
-// scaffolding, just populating the array.
+// Items purchase/use logic (coins, stock caps, Ace Card's scaling price)
+// still lives in GameContext's inventory functions, keyed by each item's
+// `key` — only the three keys the in-match code actually checks
+// (insight_lens, ace_card, confidence_pill) do anything when bought. Any
+// other key an admin adds shows up in the list but is presentation-only
+// until a developer wires up what it does.
 //
-// Items are split into two categories — Consumable and Gear. The category
-// *labels* are pulled from one constant (ITEM_CATEGORIES) specifically so
-// renaming "Gears" later is a one-line change.
-//
-// Two levels of tabs on one screen (Themes/Items, then Consumable/Gear)
-// read as one confusing row unless they're visually unequal — the section
-// switch is styled as a real top-level tab strip (underline, bigger type),
-// the category switch as a small subordinate pill group nested under it.
+// Themes change the app's whole look — colors, fonts, and (if set) a
+// background image — the moment they're equipped. See GameContext's
+// buyTheme/equipTheme and the CSS-variable injection in (app)/layout.tsx.
 
 import { useState, useRef, ReactNode } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
-import { GAME_CONFIG } from "@/config/Game";
+import type { StoreItemDef } from "@/config/Game";
+import type { StoreTheme } from "@/config/Themes";
 
 type CategoryKey = "consumable" | "gear";
 
@@ -30,30 +29,26 @@ const ITEM_CATEGORIES: Record<CategoryKey, { key: CategoryKey; label: string }> 
   gear: { key: "gear", label: "Gears" },
 };
 
-// Future themes go here — empty on purpose for now. Each entry will need at
-// least { id, name, cost, preview } once themes actually exist.
-const THEMES: any[] = [];
-
-type Section = "themes" | "items";
+type Section = "items" | "themes";
 
 export default function StorePage() {
   const {
     profile, upProfile, inventory, inventoryLoading,
     aceCardPrice, buyInsightLens, buyAceCard, buyConfidencePill,
     cheatTapEnabled,
+    storeItems, storeItemsLoading,
+    themes, themesLoading, ownedThemeIds, equippedTheme, buyTheme, equipTheme,
   } = useGame();
 
   const [section, setSection] = useState<Section>("items");
   const [category, setCategory] = useState<CategoryKey>("consumable");
 
-  const { insightLens: insightLensCfg, aceCard: aceCardCfg, confidencePill: pillCfg } = GAME_CONFIG.store;
-
-  const nextAcePrice = aceCardPrice(inventory.aceCards);
-  const aceAtMax = inventory.aceCards >= aceCardCfg.maxStock;
-  const pillAtMax = inventory.confidencePills >= pillCfg.maxStock;
+  const activeItems = storeItems.filter((i) => i.active);
+  const gearItems = activeItems.filter((i) => i.category === "gear");
+  const consumableItems = activeItems.filter((i) => i.category === "consumable");
+  const activeThemes = themes.filter((t) => t.active);
 
   // ── EASTER EGG: 5 consecutive taps on the Debucks counter -> 10,000 ──
-  // Moved here from the battle screen — this is now the only place it works.
   const coinTapCountRef = useRef(0);
   const coinTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   function handleCoinTap() {
@@ -67,6 +62,60 @@ export default function StorePage() {
     }
   }
 
+  function renderItem(item: StoreItemDef) {
+    if (item.key === "insight_lens") {
+      return (
+        <ItemCard key={item.key} icon={item.icon} name={item.name} categoryLabel={ITEM_CATEGORIES.gear.label} description={item.description}
+          footer={inventory.insightLens ? <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600 }}>✓ Owned — permanent</span> : undefined}
+        >
+          {!inventory.insightLens && (
+            <BuyButton cost={item.baseCost} coins={profile.coins} onBuy={buyInsightLens}
+              label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{item.baseCost}</>} />
+          )}
+        </ItemCard>
+      );
+    }
+    if (item.key === "ace_card") {
+      const nextPrice = aceCardPrice(inventory.aceCards);
+      const atMax = item.maxStock != null && inventory.aceCards >= item.maxStock;
+      return (
+        <div key={item.key}>
+          <ItemCard icon={item.icon} name={item.name} categoryLabel={ITEM_CATEGORIES.consumable.label} description={item.description}
+            footer={<span style={{ fontSize: 12, color: "var(--muted)" }}>Held: <b style={{ color: "var(--text)" }}>{inventory.aceCards}</b>{item.maxStock != null ? ` / ${item.maxStock}` : ""}</span>}
+          >
+            <BuyButton cost={nextPrice} coins={profile.coins} disabled={atMax} disabledLabel={atMax ? "Stock full" : undefined}
+              onBuy={buyAceCard} label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{nextPrice}</>} />
+          </ItemCard>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, paddingLeft: 2 }}>
+            Price depends on how many you're holding right now — using cards brings it back down, buying pushes it up.
+          </div>
+        </div>
+      );
+    }
+    if (item.key === "confidence_pill") {
+      const atMax = item.maxStock != null && inventory.confidencePills >= item.maxStock;
+      return (
+        <ItemCard key={item.key} icon={item.icon} name={item.name} categoryLabel={ITEM_CATEGORIES.consumable.label} description={item.description}
+          footer={<span style={{ fontSize: 12, color: "var(--muted)" }}>Held: <b style={{ color: "var(--text)" }}>{inventory.confidencePills}</b>{item.maxStock != null ? ` / ${item.maxStock}` : ""}</span>}
+        >
+          <BuyButton cost={item.baseCost} coins={profile.coins} disabled={atMax} disabledLabel={atMax ? "Stock full" : undefined}
+            onBuy={buyConfidencePill} label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{item.baseCost}</>} />
+        </ItemCard>
+      );
+    }
+    // Any other admin-added key: shown, but there's no in-match effect wired
+    // up for it yet, so it's presentation-only until a developer adds one.
+    return (
+      <ItemCard key={item.key} icon={item.icon} name={item.name} categoryLabel={ITEM_CATEGORIES[item.category].label} description={item.description}
+        footer={<span style={{ fontSize: 11, color: "var(--muted)" }}>Coming soon</span>}
+      >
+        <button className="btn btn-sm" disabled style={{ opacity: 0.5 }}>
+          Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{item.baseCost}
+        </button>
+      </ItemCard>
+    );
+  }
+
   return (
     <div className="root" style={{ padding: "20px 16px", maxWidth: 640, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
@@ -76,9 +125,6 @@ export default function StorePage() {
         </span>
       </div>
 
-      {/* Section tabs — Themes / Items. Top-level nav: underline indicator,
-          bigger uppercase type, full-bleed border — reads as "this is the
-          primary switch on this screen". */}
       <div style={{ display: "flex", gap: 24, marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
         {(["items", "themes"] as Section[]).map((s) => (
           <button
@@ -99,18 +145,25 @@ export default function StorePage() {
       </div>
 
       {section === "themes" && (
-        THEMES.length === 0 ? (
+        themesLoading ? (
+          <p style={{ color: "var(--muted)", fontSize: 13 }}>Loading themes…</p>
+        ) : activeThemes.length === 0 ? (
           <div className="card" style={{ padding: 24, textAlign: "center" }}>
             <div style={{ fontSize: 28, marginBottom: 8 }}>🎨</div>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>No themes yet</div>
-            <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.6 }}>
-              Theme & customization items are coming soon — check back later.
-            </div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>No themes available</div>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {THEMES.map((t: any) => (
-              <div key={t.id} className="card" style={{ padding: 16 }}>{t.name}</div>
+            {activeThemes.map((theme) => (
+              <ThemeCard
+                key={theme.id}
+                theme={theme}
+                owned={ownedThemeIds.includes(theme.id)}
+                equipped={equippedTheme?.id === theme.id}
+                coins={profile.coins}
+                onBuy={() => buyTheme(theme.id)}
+                onEquip={() => equipTheme(theme.id)}
+              />
             ))}
           </div>
         )
@@ -118,10 +171,6 @@ export default function StorePage() {
 
       {section === "items" && (
         <>
-          {/* Category tabs — Consumable / Gear. Deliberately a small,
-              subordinate pill group (not full-width buttons like the
-              section tabs above) so it visibly nests under "Items" rather
-              than competing with it for attention. */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
             <span style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
               Category
@@ -144,78 +193,17 @@ export default function StorePage() {
             </div>
           </div>
 
-          {inventoryLoading ? (
+          {inventoryLoading || storeItemsLoading ? (
             <p style={{ color: "var(--muted)", fontSize: 13 }}>Loading store…</p>
-          ) : category === "gear" ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <ItemCard
-                icon="🔍"
-                name="Insight Lens"
-                categoryLabel={ITEM_CATEGORIES.gear.label}
-                description="Permanently unlocks the Insight lifeline in every match — see the opponent's weak points and fallacies as you debate, as many times as you want. Buy it once; it's yours for good."
-                footer={
-                  inventory.insightLens
-                    ? <span style={{ fontSize: 12, color: "var(--green, #5dbb8a)", fontWeight: 600 }}>✓ Owned — permanent</span>
-                    : undefined
-                }
-              >
-                {!inventory.insightLens && (
-                  <BuyButton
-                    cost={insightLensCfg.cost}
-                    coins={profile.coins}
-                    onBuy={buyInsightLens}
-                    label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{insightLensCfg.cost}</>}
-                  />
-                )}
-              </ItemCard>
-            </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <ItemCard
-                icon="🂡"
-                name="Ace Card"
-                categoryLabel={ITEM_CATEGORIES.consumable.label}
-                description="Reveals 3 AI-suggested responses to the opponent's argument — pick one and use it as-is, or as a starting point. Consumed on use."
-                footer={
-                  <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                    Held: <b style={{ color: "var(--text)" }}>{inventory.aceCards}</b> / {aceCardCfg.maxStock}
-                  </span>
-                }
-              >
-                <BuyButton
-                  cost={nextAcePrice}
-                  coins={profile.coins}
-                  disabled={aceAtMax}
-                  disabledLabel={aceAtMax ? "Stock full" : undefined}
-                  onBuy={buyAceCard}
-                  label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{nextAcePrice}</>}
-                />
-              </ItemCard>
-
-              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: -6, marginBottom: -2, paddingLeft: 2 }}>
-                Price depends on how many you're holding right now (next after this: <DebucksIcon style={{ marginLeft: 1, marginRight: 1 }} />{aceCardPrice(Math.min(inventory.aceCards + 1, aceCardCfg.maxStock))}) — using cards brings it back down, buying pushes it up.
-              </div>
-
-              <ItemCard
-                icon="💊"
-                name="Confidence Pill"
-                categoryLabel={ITEM_CATEGORIES.consumable.label}
-                description="Restores +10 HP the moment you take it. Consumed on use."
-                footer={
-                  <span style={{ fontSize: 12, color: "var(--muted)" }}>
-                    Held: <b style={{ color: "var(--text)" }}>{inventory.confidencePills}</b> / {pillCfg.maxStock}
-                  </span>
-                }
-              >
-                <BuyButton
-                  cost={pillCfg.cost}
-                  coins={profile.coins}
-                  disabled={pillAtMax}
-                  disabledLabel={pillAtMax ? "Stock full" : undefined}
-                  onBuy={buyConfidencePill}
-                  label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{pillCfg.cost}</>}
-                />
-              </ItemCard>
+              {(category === "gear" ? gearItems : consumableItems).length === 0 ? (
+                <div className="card" style={{ padding: 20, textAlign: "center", fontSize: 13, color: "var(--muted)" }}>
+                  Nothing here right now.
+                </div>
+              ) : (
+                (category === "gear" ? gearItems : consumableItems).map(renderItem)
+              )}
             </div>
           )}
         </>
@@ -281,5 +269,54 @@ function BuyButton({
     >
       {disabled && disabledLabel ? disabledLabel : cantAfford ? "Not enough" : label}
     </button>
+  );
+}
+
+function ThemeCard({
+  theme, owned, equipped, coins, onBuy, onEquip,
+}: {
+  theme: StoreTheme;
+  owned: boolean;
+  equipped: boolean;
+  coins: number;
+  onBuy: () => void;
+  onEquip: () => void;
+}) {
+  const c = theme.colors;
+  return (
+    <div className="card" style={{ padding: 16, border: equipped ? "1px solid var(--blue)" : undefined }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+        {/* Swatch preview: a little mock card rendered in the theme's own
+            colors/fonts so you can see it before buying/equipping. */}
+        <div style={{
+          width: 64, height: 64, borderRadius: 10, flexShrink: 0, overflow: "hidden",
+          background: c.bg, border: `1px solid ${c.border}`,
+          ...(theme.backgroundImageUrl ? { backgroundImage: `url(${theme.backgroundImageUrl})`, backgroundSize: "cover", backgroundPosition: "center" } : {}),
+        }}>
+          <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}>
+            <div style={{ fontFamily: theme.fontHeading, color: c.blue, fontSize: 18, fontWeight: 700 }}>D</div>
+            <div style={{ width: 30, height: 4, borderRadius: 2, background: c.blue }} />
+          </div>
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{theme.name}</span>
+            {theme.isDefault && <span className="badge" style={{ fontSize: 9, background: "var(--surface2)", color: "var(--muted)" }}>Default</span>}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.55, marginBottom: 10 }}>{theme.description}</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <span />
+            {equipped ? (
+              <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600 }}>✓ Equipped</span>
+            ) : owned ? (
+              <button className="btn btn-primary btn-sm" onClick={onEquip}>Equip</button>
+            ) : (
+              <BuyButton cost={theme.cost} coins={coins} onBuy={onBuy}
+                label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{theme.cost}</>} />
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

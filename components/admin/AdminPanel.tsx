@@ -14,6 +14,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useGame } from "@/contexts/GameContext";
 import { callAI } from "@/lib/ai";
+import { DEFAULT_THEMES, FONT_PRESETS } from "@/config/Themes";
 
 const supabase = createClient();
 
@@ -32,7 +33,7 @@ function reorderArray<T>(arr: T[], from: number, to: number): T[] {
 
 // Persists the new order as consecutive sort_order values (0, 1, 2, ...)
 // matching each row's index in the reordered array.
-async function persistSortOrder(table: "debots" | "topics", orderedIds: any[]) {
+async function persistSortOrder(table: "debots" | "topics" | "store_items" | "store_themes", orderedIds: any[]) {
   await Promise.all(
     orderedIds.map((id, idx) => supabase.from(table).update({ sort_order: idx }).eq("id", id))
   );
@@ -109,7 +110,7 @@ function useDragReorder(onCommit: (from: number, to: number) => void) {
 }
 
 export function AdminPanel({ profile }: AdminPanelProps) {
-  const [tab, setTab] = useState<"debots" | "topics" | "settings" | "ai">("debots");
+  const [tab, setTab] = useState<"debots" | "topics" | "store" | "settings" | "ai">("debots");
 
   // Fail closed: no profile, or not an admin -> render nothing at all.
   if (!profile?.is_admin) return null;
@@ -123,6 +124,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
         {([
           ["debots", "Debots"],
           ["topics", "Topics"],
+          ["store", "Store"],
           ["settings", "Settings"],
           ["ai", "AI"],
         ] as const).map(([t, label]) => (
@@ -138,6 +140,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
 
       {tab === "debots" && <DebotsAdmin />}
       {tab === "topics" && <TopicsAdmin />}
+      {tab === "store" && <StoreAdmin />}
       {tab === "settings" && <SettingsAdmin />}
       {tab === "ai" && <AiSettingsAdmin />}
     </div>
@@ -708,6 +711,541 @@ function TopicsAdmin() {
 }
 
 // ===========================================================================
+// STORE — two subtabs: Items (the consumable/gear catalog bought with
+// debucks) and Themes (whole-app color/font/background looks). Both are
+// full CRUD, live in their own tables (store_items, store_themes), and both
+// call refetchStoreItems()/refetchThemes() after any write so the live
+// Store page and the equipped theme update immediately without a reload.
+// ===========================================================================
+
+function StoreAdmin() {
+  const [sub, setSub] = useState<"items" | "themes">("items");
+  return (
+    <div>
+      <div style={{ display: "inline-flex", gap: 4, background: "var(--faint)", borderRadius: 999, padding: 3, marginBottom: 14 }}>
+        {(["items", "themes"] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setSub(s)}
+            style={{
+              border: "none", cursor: "pointer", borderRadius: 999,
+              padding: "5px 14px", fontSize: 12, fontWeight: 600, textTransform: "capitalize",
+              background: sub === s ? "var(--surface2)" : "transparent",
+              color: sub === s ? "var(--text)" : "var(--muted)",
+            }}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+      {sub === "items" ? <ItemsAdmin /> : <ThemesAdmin />}
+    </div>
+  );
+}
+
+const BLANK_ITEM = {
+  id: null as any,
+  key: "",
+  category: "consumable" as "consumable" | "gear",
+  name: "",
+  icon: "🎁",
+  description: "",
+  pricing_type: "flat" as "flat" | "scaling",
+  base_cost: 0,
+  price_multiplier: 2,
+  max_stock: 5 as number | null,
+  heal_amount: 0,
+  active: true,
+};
+
+function ItemsAdmin() {
+  const { refetchStoreItems } = useGame();
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<any>(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<any>(null);
+  const [status, setStatus] = useState("");
+
+  async function load() {
+    setLoading(true);
+    const { data, error } = await supabase.from("store_items").select("*").order("sort_order", { ascending: true, nullsFirst: false }).order("id", { ascending: true });
+    if (error) setStatus(`Failed to load: ${error.message}`);
+    else setItems(data || []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function commitReorder(from: number, to: number) {
+    const newList = reorderArray(items, from, to);
+    setItems(newList);
+    await persistSortOrder("store_items", newList.map((i) => i.id));
+    refetchStoreItems();
+  }
+  const reorder = useDragReorder(commitReorder);
+
+  function startEdit(i: any) { setConfirmingDeleteId(null); setEditing({ ...i }); }
+  function startNew() { setConfirmingDeleteId(null); setEditing({ ...BLANK_ITEM }); }
+  function cancelEdit() { setEditing(null); }
+  function updateField(key: string, value: any) { setEditing((prev: any) => ({ ...prev, [key]: value })); }
+
+  async function save() {
+    if (!editing?.key?.trim() || !editing?.name?.trim()) {
+      setStatus("Key and name are both required.");
+      return;
+    }
+    setStatus("Saving…");
+    const payload = {
+      key: editing.key.trim(),
+      category: editing.category,
+      name: editing.name.trim(),
+      icon: editing.icon?.trim() || "🎁",
+      description: editing.description || "",
+      pricing_type: editing.pricing_type,
+      base_cost: Number(editing.base_cost) || 0,
+      price_multiplier: editing.pricing_type === "scaling" ? (Number(editing.price_multiplier) || 2) : 1,
+      max_stock: editing.category === "consumable"
+        ? (editing.max_stock === "" || editing.max_stock == null ? null : Number(editing.max_stock))
+        : null,
+      heal_amount: Number(editing.heal_amount) || 0,
+      active: !!editing.active,
+    };
+    const res = editing.id
+      ? await supabase.from("store_items").update(payload).eq("id", editing.id).select()
+      : await supabase.from("store_items").insert({ ...payload, sort_order: items.length }).select().single();
+
+    if (res.error) { setStatus(`Failed: ${res.error.message}`); return; }
+    setStatus(editing.id ? "Item updated." : "Item created.");
+    setEditing(null);
+    load();
+    refetchStoreItems();
+  }
+
+  async function confirmDelete(id: any) {
+    setStatus("Deleting…");
+    const { error } = await supabase.from("store_items").delete().eq("id", id);
+    setConfirmingDeleteId(null);
+    if (error) setStatus(`Failed to delete: ${error.message}`);
+    else { setStatus("Item deleted."); load(); refetchStoreItems(); }
+  }
+
+  if (editing) {
+    return (
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
+          {editing.id ? `Edit: ${editing.name || "Item"}` : "New Item"}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 6 }}>
+          <LabeledInput
+            label="Key" value={editing.key} onChange={(v) => updateField("key", v)}
+            disabled={!!editing.id}
+          />
+          <div>
+            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Category</label>
+            <select className="input-field" value={editing.category} onChange={(e) => updateField("category", e.target.value)} style={{ width: "100%" }}>
+              <option value="consumable">Consumable</option>
+              <option value="gear">Gear</option>
+            </select>
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
+          <code>insight_lens</code>, <code>ace_card</code>, and <code>confidence_pill</code> are the three keys the in-match code actually
+          checks — use one of these exactly to restore that item's original behavior, or delete/edit its name, icon, description, and
+          price freely without breaking anything. Any other key is shown in the Store but has no effect in a match until a developer
+          wires it up.
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+          <LabeledInput label="Name" value={editing.name} onChange={(v) => updateField("name", v)} />
+          <LabeledInput label="Icon (emoji)" value={editing.icon} onChange={(v) => updateField("icon", v)} />
+        </div>
+        <LabeledTextarea label="Description" value={editing.description} onChange={(v) => updateField("description", v)} />
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+          <div>
+            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Pricing</label>
+            <select className="input-field" value={editing.pricing_type} onChange={(e) => updateField("pricing_type", e.target.value)} style={{ width: "100%" }}>
+              <option value="flat">Flat — same price every time</option>
+              <option value="scaling">Scaling — price grows with stock held</option>
+            </select>
+          </div>
+          <LabeledInput label="Base cost (❋)" value={editing.base_cost} onChange={(v) => updateField("base_cost", v)} type="number" />
+          {editing.pricing_type === "scaling" && (
+            <LabeledInput
+              label="Price multiplier (× per held)" value={editing.price_multiplier}
+              onChange={(v) => updateField("price_multiplier", v)} type="number" step="0.1"
+            />
+          )}
+          {editing.category === "consumable" && (
+            <LabeledInput
+              label="Max stock (blank = unlimited)" value={editing.max_stock ?? ""}
+              onChange={(v) => updateField("max_stock", v)} type="number"
+            />
+          )}
+          {editing.category === "consumable" && (
+            <LabeledInput
+              label="Heal amount (HP, 0 = no heal effect)" value={editing.heal_amount ?? 0}
+              onChange={(v) => updateField("heal_amount", v)} type="number"
+            />
+          )}
+        </div>
+
+        <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12, fontSize: 12, color: "var(--text)" }}>
+          <input type="checkbox" checked={!!editing.active} onChange={(e) => updateField("active", e.target.checked)} />
+          Active — visible in the Store
+        </label>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
+          <button className="btn btn-ghost btn-sm" onClick={cancelEdit}>Cancel</button>
+        </div>
+        {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: "var(--muted)" }}>{items.length} items</span>
+        <button className="btn btn-primary btn-sm" onClick={startNew}>+ New Item</button>
+      </div>
+      {loading ? (
+        <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
+          {items.map((it, i) => (
+            <div key={it.id} ref={reorder.setRowRef(i)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", opacity: it.active === false ? 0.5 : 1, ...reorder.rowStyle(i) }}>
+              <span {...reorder.handleProps(i)}>⠿</span>
+              <span style={{ fontSize: 18 }}>{it.icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                  <code>{it.key}</code> · {it.category} · ❋{it.base_cost}{it.pricing_type === "scaling" ? ` ×${it.price_multiplier}^held` : ""}
+                  {it.heal_amount ? ` · heals +${it.heal_amount} HP` : ""}
+                  {it.active === false && " · inactive"}
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => startEdit(it)}>Edit</button>
+              {confirmingDeleteId === it.id ? (
+                <>
+                  <button className="btn btn-danger btn-sm" onClick={() => confirmDelete(it.id)}>Confirm</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setConfirmingDeleteId(null)}>Cancel</button>
+                </>
+              ) : (
+                <button className="btn btn-ghost btn-sm" onClick={() => setConfirmingDeleteId(it.id)}>Delete</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+    </div>
+  );
+}
+
+const THEME_COLOR_FIELDS: { key: keyof import("@/config/Themes").ThemeColors; label: string }[] = [
+  { key: "bg", label: "Background" },
+  { key: "surface", label: "Surface" },
+  { key: "surface2", label: "Surface 2" },
+  { key: "border", label: "Border" },
+  { key: "border2", label: "Border 2" },
+  { key: "text", label: "Text" },
+  { key: "muted", label: "Muted text" },
+  { key: "faint", label: "Faint fill" },
+  { key: "blue", label: "Accent (blue)" },
+  { key: "blueSoft", label: "Accent soft" },
+  { key: "red", label: "Red" },
+  { key: "redSoft", label: "Red soft" },
+  { key: "amber", label: "Amber" },
+  { key: "amberSoft", label: "Amber soft" },
+  { key: "green", label: "Green" },
+  { key: "greenSoft", label: "Green soft" },
+  { key: "purple", label: "Purple" },
+  { key: "teal", label: "Teal" },
+];
+
+function blankTheme() {
+  return {
+    id: null as any,
+    name: "",
+    description: "",
+    cost: 0,
+    is_default: false,
+    active: true,
+    colors: { ...DEFAULT_THEMES[0].colors },
+    font_heading: FONT_PRESETS.heading[0].family,
+    font_body: FONT_PRESETS.body[0].family,
+    google_font_url: FONT_PRESETS.heading[0].googleFontUrl as string | null,
+    background_image_url: null as string | null,
+    background_opacity: 0.16,
+  };
+}
+
+function ThemesAdmin() {
+  const { refetchThemes } = useGame();
+  const [themeRows, setThemeRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<any>(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<any>(null);
+  const [status, setStatus] = useState("");
+  const [uploading, setUploading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const { data, error } = await supabase.from("store_themes").select("*").order("sort_order", { ascending: true, nullsFirst: false }).order("id", { ascending: true });
+    if (error) setStatus(`Failed to load: ${error.message}`);
+    else setThemeRows(data || []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function commitReorder(from: number, to: number) {
+    const newList = reorderArray(themeRows, from, to);
+    setThemeRows(newList);
+    await persistSortOrder("store_themes", newList.map((t) => t.id));
+    refetchThemes();
+  }
+  const reorder = useDragReorder(commitReorder);
+
+  function startEdit(t: any) { setConfirmingDeleteId(null); setEditing({ ...t, colors: { ...t.colors } }); }
+  function startNew() { setConfirmingDeleteId(null); setEditing(blankTheme()); }
+  function cancelEdit() { setEditing(null); }
+  function updateField(key: string, value: any) { setEditing((prev: any) => ({ ...prev, [key]: value })); }
+  function updateColor(key: string, value: string) { setEditing((prev: any) => ({ ...prev, colors: { ...prev.colors, [key]: value } })); }
+
+  async function save() {
+    if (!editing?.name?.trim()) { setStatus("Name is required."); return; }
+    setStatus("Saving…");
+    const payload = {
+      name: editing.name.trim(),
+      description: editing.description || "",
+      cost: Number(editing.cost) || 0,
+      is_default: !!editing.is_default,
+      active: !!editing.active,
+      colors: editing.colors,
+      font_heading: editing.font_heading,
+      font_body: editing.font_body,
+      google_font_url: editing.google_font_url || null,
+      background_image_url: editing.background_image_url || null,
+      background_opacity: Math.max(0, Math.min(1, Number(editing.background_opacity))) || 0,
+    };
+
+    // Only one theme can be the default look everyone starts with.
+    if (payload.is_default) {
+      await supabase.from("store_themes").update({ is_default: false }).neq("id", editing.id ?? -1);
+    }
+
+    const res = editing.id
+      ? await supabase.from("store_themes").update(payload).eq("id", editing.id).select()
+      : await supabase.from("store_themes").insert({ ...payload, sort_order: themeRows.length }).select().single();
+
+    if (res.error) { setStatus(`Failed: ${res.error.message}`); return; }
+    setStatus(editing.id ? "Theme updated." : "Theme created — you can now upload a background image for it.");
+    if (!editing.id && res.data) {
+      setEditing({ ...res.data, colors: { ...res.data.colors } });
+    } else {
+      setEditing(null);
+    }
+    load();
+    refetchThemes();
+  }
+
+  async function confirmDelete(id: any) {
+    setStatus("Deleting…");
+    const { error } = await supabase.from("store_themes").delete().eq("id", id);
+    setConfirmingDeleteId(null);
+    if (error) setStatus(`Failed to delete: ${error.message}`);
+    else { setStatus("Theme deleted."); load(); refetchThemes(); }
+  }
+
+  async function uploadBg(file: File) {
+    if (!editing?.id) return;
+    setUploading(true);
+    setStatus("Uploading…");
+    try {
+      const ext = file.name.split(".").pop() || "png";
+      const path = `theme-bg-${editing.id}-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from("site-assets").upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from("site-assets").getPublicUrl(path);
+      const url = pub.publicUrl;
+      const { data: dbData, error: dbErr } = await supabase.from("store_themes").update({ background_image_url: url }).eq("id", editing.id).select();
+      if (dbErr) throw dbErr;
+      if (!dbData || dbData.length === 0) throw new Error("Update didn't apply — check the 'store_themes' table UPDATE policy allows this admin account.");
+      setEditing((prev: any) => ({ ...prev, background_image_url: url }));
+      setStatus("Background image updated.");
+      load();
+      refetchThemes();
+    } catch (err: any) {
+      setStatus(`Upload failed: ${err.message || err}`);
+    }
+    setUploading(false);
+  }
+
+  async function removeBg() {
+    if (!editing?.id) return;
+    setUploading(true);
+    const { error } = await supabase.from("store_themes").update({ background_image_url: null }).eq("id", editing.id);
+    if (error) setStatus(`Remove failed: ${error.message}`);
+    else {
+      setEditing((prev: any) => ({ ...prev, background_image_url: null }));
+      setStatus("Background image removed.");
+      load();
+      refetchThemes();
+    }
+    setUploading(false);
+  }
+
+  if (editing) {
+    return (
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
+          {editing.id ? `Edit: ${editing.name || "Theme"}` : "New Theme"}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+          <LabeledInput label="Name" value={editing.name} onChange={(v) => updateField("name", v)} />
+          <LabeledInput label="Cost (❋, 0 = free)" value={editing.cost} onChange={(v) => updateField("cost", v)} type="number" />
+        </div>
+        <LabeledTextarea label="Description" value={editing.description} onChange={(v) => updateField("description", v)} />
+
+        <div style={{ display: "flex", gap: 16, margin: "10px 0 14px" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={!!editing.active} onChange={(e) => updateField("active", e.target.checked)} />
+            Active — visible in the Store
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={!!editing.is_default} onChange={(e) => updateField("is_default", e.target.checked)} />
+            Default look (free, applied when nothing's equipped)
+          </label>
+        </div>
+
+        {/* Live preview — a tiny mock screen rendered in this theme's own
+            colors/fonts, updates as fields change. */}
+        <div style={{
+          padding: 16, borderRadius: 10, marginBottom: 14,
+          background: editing.colors.bg, border: `1px solid ${editing.colors.border}`,
+          ...(editing.background_image_url ? { backgroundImage: `url(${editing.background_image_url})`, backgroundSize: "cover", backgroundPosition: "center" } : {}),
+        }}>
+          <div style={{ fontFamily: editing.font_heading, color: editing.colors.text, fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Debatto</div>
+          <div style={{ fontFamily: editing.font_body, color: editing.colors.muted, fontSize: 12, marginBottom: 10 }}>Preview of this theme's look.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <span style={{ padding: "5px 10px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: editing.colors.blueSoft, color: editing.colors.blue }}>Accent badge</span>
+            <span style={{ padding: "5px 10px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: editing.colors.surface2, color: editing.colors.text, border: `1px solid ${editing.colors.border2}` }}>Surface</span>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Colors</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+          {THEME_COLOR_FIELDS.map((f) => (
+            <LabeledInput key={f.key} label={f.label} value={editing.colors[f.key]} onChange={(v) => updateColor(f.key, v)} />
+          ))}
+        </div>
+
+        <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 }}>Fonts</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 6 }}>
+          <div>
+            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Heading font preset</label>
+            <select
+              className="input-field" style={{ width: "100%" }}
+              value={FONT_PRESETS.heading.find((p) => p.family === editing.font_heading)?.family || ""}
+              onChange={(e) => {
+                const preset = FONT_PRESETS.heading.find((p) => p.family === e.target.value);
+                if (preset) { updateField("font_heading", preset.family); updateField("google_font_url", preset.googleFontUrl); }
+              }}
+            >
+              <option value="" disabled>Custom (edit below)</option>
+              {FONT_PRESETS.heading.map((p) => <option key={p.family} value={p.family}>{p.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Body font preset</label>
+            <select
+              className="input-field" style={{ width: "100%" }}
+              value={FONT_PRESETS.body.find((p) => p.family === editing.font_body)?.family || ""}
+              onChange={(e) => {
+                const preset = FONT_PRESETS.body.find((p) => p.family === e.target.value);
+                if (preset) updateField("font_body", preset.family);
+              }}
+            >
+              <option value="" disabled>Custom (edit below)</option>
+              {FONT_PRESETS.body.map((p) => <option key={p.family} value={p.family}>{p.label}</option>)}
+            </select>
+          </div>
+          <LabeledInput label="Heading font-family (CSS)" value={editing.font_heading} onChange={(v) => updateField("font_heading", v)} />
+          <LabeledInput label="Body font-family (CSS)" value={editing.font_body} onChange={(v) => updateField("font_body", v)} />
+        </div>
+        <LabeledInput label="Google Font URL (optional — leave blank for system fonts)" value={editing.google_font_url || ""} onChange={(v) => updateField("google_font_url", v)} />
+
+        <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", margin: "14px 0 8px" }}>Background</div>
+        <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 8 }}>
+          If a theme has a background image, it takes priority over the site-wide background set in Admin → Settings for anyone with this theme equipped.
+        </div>
+        <SpriteSlot
+          label="Background" url={editing.background_image_url} disabled={!editing.id} uploading={uploading}
+          onFile={uploadBg} onRemove={editing.background_image_url ? removeBg : undefined}
+        />
+        {!editing.id && <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6 }}>Save this theme first, then upload a background image.</div>}
+
+        <div style={{ marginTop: 14 }}>
+          <label style={{ display: "block", fontSize: 11, color: "var(--muted)" }}>
+            Background opacity ({Math.round(editing.background_opacity * 100)}%)
+            <input
+              type="range" min={0} max={1} step={0.01} value={editing.background_opacity}
+              onChange={(e) => updateField("background_opacity", Number(e.target.value))}
+              style={{ display: "block", width: "100%", marginTop: 6, accentColor: "var(--blue)" }}
+            />
+          </label>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
+          <button className="btn btn-ghost btn-sm" onClick={cancelEdit}>Exit</button>
+        </div>
+        {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: "var(--muted)" }}>{themeRows.length} themes</span>
+        <button className="btn btn-primary btn-sm" onClick={startNew}>+ New Theme</button>
+      </div>
+      {loading ? (
+        <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
+          {themeRows.map((t, i) => (
+            <div key={t.id} ref={reorder.setRowRef(i)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", opacity: t.active === false ? 0.5 : 1, ...reorder.rowStyle(i) }}>
+              <span {...reorder.handleProps(i)}>⠿</span>
+              <span style={{ width: 20, height: 20, borderRadius: 5, background: t.colors?.bg, border: `1px solid ${t.colors?.border}`, flexShrink: 0 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {t.name} {t.is_default && <span style={{ fontWeight: 400, color: "var(--muted)" }}>· default</span>}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>❋{t.cost}{t.active === false && " · inactive"}</div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => startEdit(t)}>Edit</button>
+              {confirmingDeleteId === t.id ? (
+                <>
+                  <button className="btn btn-danger btn-sm" onClick={() => confirmDelete(t.id)}>Confirm</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setConfirmingDeleteId(null)}>Cancel</button>
+                </>
+              ) : (
+                <button className="btn btn-ghost btn-sm" onClick={() => setConfirmingDeleteId(t.id)}>Delete</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+    </div>
+  );
+}
+
+// ===========================================================================
 // SETTINGS — AI knobs + number-of-rounds options, stored in app_settings.
 // AI knobs are resolved server-side by app/api/debate/route.ts; rounds are
 // read client-side by GameContext. Neither is ever trusted from the browser
@@ -895,9 +1433,6 @@ function SettingsAdmin() {
         Enable the 5-tap debucks cheat
       </label>
 
-      <button className="btn btn-primary btn-sm" style={{ marginTop: 14 }} onClick={save}>Save settings</button>
-      {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
-
       <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 24, marginBottom: 8 }}>
         Landing Page Background
       </div>
@@ -938,7 +1473,7 @@ function SettingsAdmin() {
           Also use this background on every other page, not just landing
         </label>
         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-          Uses the same image and opacity set above. This one's part of "Save settings" below, not immediate.
+          Uses the same image and opacity set above. This one's saved together with the rest of this form via "Save settings" below.
         </div>
       </div>
 
@@ -957,8 +1492,11 @@ function SettingsAdmin() {
         style={{ width: "100%" }}
       />
       <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-        Part of "Save settings" below, not immediate.
+        Saved together with the rest of this form via "Save settings" below.
       </div>
+
+      <button className="btn btn-primary btn-sm" style={{ marginTop: 20 }} onClick={save}>Save settings</button>
+      {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
     </div>
   );
 }
@@ -1032,9 +1570,9 @@ function AiSettingsAdmin() {
 // ===========================================================================
 
 function LabeledInput({
-  label, value, onChange, type = "text", step,
+  label, value, onChange, type = "text", step, disabled,
 }: {
-  label: string; value: any; onChange: (v: any) => void; type?: string; step?: string;
+  label: string; value: any; onChange: (v: any) => void; type?: string; step?: string; disabled?: boolean;
 }) {
   return (
     <label style={{ display: "block", fontSize: 11, color: "var(--muted)" }}>
@@ -1043,9 +1581,10 @@ function LabeledInput({
         className="input-field"
         type={type}
         step={step}
+        disabled={disabled}
         value={value ?? ""}
         onChange={(e) => onChange(type === "number" ? e.target.value : e.target.value)}
-        style={{ display: "block", width: "100%", marginTop: 3 }}
+        style={{ display: "block", width: "100%", marginTop: 3, opacity: disabled ? 0.5 : 1 }}
       />
     </label>
   );

@@ -76,6 +76,9 @@ type Result<T = unknown> =
   | { ok: true; source: "local" | "db"; data?: T }
   | { ok: false; source: "local" | "db"; error: any };
 
+type ProfileData = { coins?: number; [key: string]: any };
+type InventoryData = { insightLens: boolean; aceCards: number; confidencePills: number } | null;
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -301,7 +304,7 @@ async function writeInventory(userId: string, patch: Record<string, any>): Promi
   return { ok: true, source: "db" };
 }
 
-async function readInventory(userId: string): Promise<Result> {
+async function readInventory(userId: string): Promise<Result<InventoryData>> {
   const { data, error } = await supabase
     .from("user_inventory")
     .select("*")
@@ -379,7 +382,7 @@ async function writeMatch(userId: string, match: any): Promise<Result> {
 // Supabase-backed readers (logged-in path)
 // ---------------------------------------------------------------------------
 
-async function readProfile(userId: string): Promise<Result> {
+async function readProfile(userId: string): Promise<Result<ProfileData>> {
   const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).single();
   if (error) return { ok: false, source: "db", error };
   return { ok: true, source: "db", data };

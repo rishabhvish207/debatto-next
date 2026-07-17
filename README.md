@@ -11,11 +11,15 @@ Built with Next.js (App Router), TypeScript, Tailwind, and Supabase (Postgres + 
 | Mode | Status |
 |---|---|
 | **Debots** (`/offline`) | Playable — full loop: select debot, pick topic, debate, score, unlock rewards |
+| **Store** (`/store`) | Playable — Insight Lens (permanent lifeline unlock), Ace Cards, Confidence Pills, bought with debucks |
+| **Hub** (`/hub`) | Playable — post-landing mode-select screen |
+| **History** (`/history`) | Playable — past match log with per-round breakdowns |
+| **Settings** (`/settings`) | Playable — account (sign in/out), guest data reset |
 | **Profile** (`/profile`) | Playable — avatar, name, bio, stats, read-only Player ID for logged-in users |
 | **Admin** (`/admin`) | Playable (admin-only) — manage debots, topics, and game settings |
-| **Online** (`/online`) | Not built yet |
+| **Online → Random** (`/online/random`) | Not built yet — schema ready (`matchmaking_queue`, `online_matches`, `online_match_rounds`, `try_match_player()` RPC) |
+| **Online → Friends** (`/online/friends`) | Not built yet — schema ready (`friendships` table) |
 | **Learning** (`/learning`) | Not built yet |
-| **Store** (`/store`) | Not built yet — schema exists, no UI |
 
 ## Tech stack
 
@@ -53,6 +57,8 @@ The app expects specific tables, columns, and **Row Level Security policies** in
 
 - `profiles` — one row per user: `name`, `coins`, `wins`, `is_admin`, `bio`, `avatar_url`, `player_id` (see below), `prestige`
 - `debots` — the AI opponent catalog: `name`, `sub`, `personality`, `depth`, `story`, `arg_sentences`, `sprite_url`, `sprite_emotions` (jsonb), `multiplier` (its own attack-damage multiplier against the player), `cost`, `max_hp`, `color`, `diff` (difficulty label — read by the AI to scale how hard/easy it argues and how strictly it grades you), `dc`, `reward`, `vertices` (per-debot shape fallback; overridden globally if `app_settings.debot_vertices` is set)
+- `user_debots` — join table for per-user unlocks: `user_id`, `debot_id`, `unlocked_at`. Unlocks live here rather than as a column on `debots` itself, since a debot getting unlocked for one user must not unlock it globally for everyone.
+- `user_inventory` — one row per user for Store items: `user_id` (unique), `insight_lens` (bool, permanent), `ace_cards` (int, stackable), `confidence_pills` (int, stackable). Upserted on every purchase/use.
 - `topics` — debate topics: `title`/`text`, `category`/`cat`, `is_system` (seeded topics vs. user-submitted), `user_id`
 - `pinned_topics` — per-user topic pins: `user_id`, `topic_id`
 - `hidden_topics` — per-user topic removals (used when a user "deletes" a system topic — it's hidden for them, not removed globally): `user_id`, `topic_id`
@@ -168,6 +174,7 @@ create unique index if not exists profiles_player_id_key on public.profiles (pla
 - **Damage multiplier (`debots.multiplier`)** scales *that debot's* attack against the player. The player's damage to the opponent uses a flat, game-wide constant (`GAME_CONFIG.damage.playerMultiplier`) instead, since that shouldn't vary per-debot.
 - **Judge scoring** has a client-side backstop (`isLowEffortInput()`) independent of the AI's own judgment — low-effort/gibberish input gets zero gain and max penalty locally regardless of what the model returns, since LLMs tend to grade generously by default.
 - **Match reward** scales with rounds played: `opp.reward` is calibrated for `app_settings.rounds_default`, and the actual payout is `reward × (rounds played / default rounds)`.
+- **Store items** are bought with debucks in `/store` and consumed/used from `contexts/GameContext.tsx`, persisted through the `user_inventory` table (or `localStorage` for guests) — same dual-mode pattern as everything else. Insight Lens is a one-time permanent unlock (the in-match "Insight" lifeline becomes unlimited-use once owned); Ace Cards and Confidence Pills are stackable consumables capped at `maxStock`. Ace Card price follows `baseCost × 2^(cards currently held)`, so it's tied to what's in inventory right now, not a running lifetime purchase count — spending them back down to 0 resets the price to base.
 - **Settings flash prevention**: `roundOptions` starts empty (not a hardcoded fallback) and the Setup screen waits for `settingsLoaded` before rendering round-count buttons, so a stale default never flashes before the real admin-configured values arrive.
 
 ## Project structure
@@ -175,10 +182,16 @@ create unique index if not exists profiles_player_id_key on public.profiles (pla
 ```
 app/
   (app)/            # authenticated shell: layout.tsx has TopBar, RightDrawer, guarded-nav modal
+    hub/            # post-landing mode-select screen
     offline/        # the main debate game loop
+    store/          # Insight Lens / Ace Cards / Confidence Pills, bought with debucks
+    history/        # past match log, per-round breakdown
+    settings/       # account (sign in/out), guest data reset
     profile/        # avatar, name, bio, stats
-    admin/           # debot/topic/settings management (admin-only)
-    hub/ history/ settings/ store/ online/ learning/
+    admin/          # debot/topic/settings management (admin-only)
+    online/random/  # stub — random matchmaking, schema ready
+    online/friends/ # stub — friends/challenge flow, schema ready
+    learning/       # stub — fallacy/technique docs, not started
   api/debate/        # server route that calls Groq, reading model config from app_settings
 components/
   admin/             # AdminPanel.tsx — debot CRUD, topics, global settings
@@ -186,7 +199,7 @@ components/
   game/              # InputPanel, DialogueBox
   shell/             # TopBar, RightDrawer, ConfirmModal
   ui/                # PlayerSprite, DebotSprite, HPBar, AdvBar, DebucksIcon
-config/              # Game.ts (economy/damage/scoring constants), AI.ts (Groq defaults)
+config/              # Game.ts (economy/damage/scoring/store constants), AI.ts (Groq defaults)
 contexts/            # GameContext.tsx
 lib/                 # ai.ts (callAI), persistenceManager.ts (guest/local + Supabase persistence)
 ```
@@ -194,4 +207,4 @@ lib/                 # ai.ts (callAI), persistenceManager.ts (guest/local + Supa
 ## Known limitations
 
 - Browser back-button interception mid-match isn't reliable (see architecture notes above) — use the in-app Exit button, drawer, or header logo instead, all of which are guarded.
-- Online multiplayer, Learning, and Store are stubs.
+- Online multiplayer (both random matchmaking and challenging friends) and Learning are stubs — the underlying database schema is already in place for online, but there's no queue/matchmaking UI, Realtime subscription, or live two-human battle screen yet.

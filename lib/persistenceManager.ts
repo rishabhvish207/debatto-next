@@ -10,6 +10,7 @@
 // adding one case to each switch below — not touching call sites elsewhere.
 
 import { createClient } from "@/utils/supabase/client";
+import { GAME_CONFIG } from "@/config/Game";
 
 const supabase = createClient();
 
@@ -25,7 +26,7 @@ const LOCAL_KEYS: Record<Domain, string> = {
   debots: "debatto:unlocked_debots",   // string[] of debot ids the guest owns
   topics: "debatto:custom_topics",     // array of custom topic objects
   history: "debatto:match_history",    // array of { debotId, topicText, result, playerScore, opponentScore, rounds }
-  inventory: "debatto:inventory",      // { insightLens, aceCards, acePurchases, confidencePills } — store items owned
+  inventory: "debatto:inventory",      // { insightLens, aceCards, confidencePills } — store items owned
 };
 
 
@@ -103,7 +104,7 @@ export async function saveGameData(
     case "history":
       return writeMatch(user.id, value); // value: match record, see writeMatch()
     case "inventory":
-      return writeInventory(user.id, value); // value: partial { insightLens, aceCards, acePurchases, confidencePills }
+      return writeInventory(user.id, value); // value: partial { insightLens, aceCards, confidencePills }
   }
 }
 
@@ -146,24 +147,40 @@ export async function syncLocalToDB(user: { id: string }) {
   const migrated = { profile: false, debots: 0, topics: 0, matches: 0, inventory: false };
   const errors: any[] = [];
 
-  if (cachedProfile) {
-    // Only sync the parts of a guest profile that represent real progress.
-    // Never let a guest's placeholder name overwrite a real account name.
-    const patch: Record<string, any> = {};
-    if (typeof cachedProfile.coins === "number") patch.coins = cachedProfile.coins;
-    if (Object.keys(patch).length) {
-      const res = await writeProfile(user.id, patch);
+  // Guest progress is additive on top of whatever the account already has —
+  // never a blind overwrite. The instant the app loads in a browser with no
+  // session, it seeds a fresh guest profile (coins = starting default) and
+  // caches it locally, *before* the person ever clicks "Sign in". If that
+  // local seed were written straight onto an existing account, logging into
+  // a new device would reset a real coin balance back down to the starting
+  // amount — which is exactly what was happening.
+  if (cachedProfile && typeof cachedProfile.coins === "number") {
+    const existing = await readProfile(user.id);
+    const existingCoins = (existing.ok && typeof existing.data?.coins === "number")
+      ? existing.data.coins
+      : GAME_CONFIG.economy.startingCoins;
+    // Only the portion of the guest's local balance that's *above* the
+    // starting default represents something they actually earned in that
+    // browser as a guest — that's the only part that should move over.
+    const guestEarned = Math.max(0, cachedProfile.coins - GAME_CONFIG.economy.startingCoins);
+    if (guestEarned > 0) {
+      const res = await writeProfile(user.id, { coins: existingCoins + guestEarned });
       if (res.ok) migrated.profile = true;
       else errors.push(res.error);
     }
   }
 
   if (cachedInventory) {
+    // Same reasoning as coins: a fresh browser's guest inventory is all
+    // zeros/false, and must never stomp a real account's purchases —
+    // insightLens in particular is supposed to be permanent, so overwriting
+    // it with `false` on a new-device login would silently take it away.
+    const existingInv = await readInventory(user.id);
+    const base = (existingInv.ok && existingInv.data) ? existingInv.data : { insightLens: false, aceCards: 0, confidencePills: 0 };
     const patch: Record<string, any> = {};
-    if (typeof cachedInventory.insightLens === "boolean") patch.insightLens = cachedInventory.insightLens;
-    if (typeof cachedInventory.aceCards === "number") patch.aceCards = cachedInventory.aceCards;
-    if (typeof cachedInventory.acePurchases === "number") patch.acePurchases = cachedInventory.acePurchases;
-    if (typeof cachedInventory.confidencePills === "number") patch.confidencePills = cachedInventory.confidencePills;
+    if (typeof cachedInventory.insightLens === "boolean") patch.insightLens = base.insightLens || cachedInventory.insightLens;
+    if (typeof cachedInventory.aceCards === "number") patch.aceCards = base.aceCards + cachedInventory.aceCards;
+    if (typeof cachedInventory.confidencePills === "number") patch.confidencePills = base.confidencePills + cachedInventory.confidencePills;
     if (Object.keys(patch).length) {
       const res = await writeInventory(user.id, patch);
       if (res.ok) migrated.inventory = true;
@@ -272,12 +289,11 @@ async function writeDebotUnlock(userId: string, value: { debotId: any }): Promis
 // `profiles` rather than the join-table shape of `user_debots` (items here
 // are stackable counters, not a set of unlocked ids).
 // Expected columns: user_id (pk/unique), insight_lens (bool),
-// ace_cards (int), ace_purchases (int), confidence_pills (int).
+// ace_cards (int), confidence_pills (int).
 async function writeInventory(userId: string, patch: Record<string, any>): Promise<Result> {
   const row: Record<string, any> = { user_id: userId };
   if ("insightLens" in patch) row.insight_lens = patch.insightLens;
   if ("aceCards" in patch) row.ace_cards = patch.aceCards;
-  if ("acePurchases" in patch) row.ace_purchases = patch.acePurchases;
   if ("confidencePills" in patch) row.confidence_pills = patch.confidencePills;
 
   const { error } = await supabase.from("user_inventory").upsert(row, { onConflict: "user_id" });
@@ -299,7 +315,6 @@ async function readInventory(userId: string): Promise<Result> {
     data: {
       insightLens: !!data.insight_lens,
       aceCards: data.ace_cards ?? 0,
-      acePurchases: data.ace_purchases ?? 0,
       confidencePills: data.confidence_pills ?? 0,
     },
   };

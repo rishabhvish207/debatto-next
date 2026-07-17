@@ -11,10 +11,6 @@ export const GAME_CONFIG = {
     default: 10,
   },
 
-  hint: {
-    perRound: 1,
-  },
-
   damage: {
     playerMultiplier: 0.52,
     opponentMultiplier: 0.38,
@@ -37,13 +33,14 @@ export const GAME_CONFIG = {
   store: {
     // Gear: one-time, permanent purchases.
     insightLens: {
-      cost: 50, // permanently unlocks the in-match Hint lifeline
+      cost: 50, // permanently unlocks the in-match Insight lifeline (unlimited uses once owned)
     },
     // Consumables: stack up to maxStock, spent one-at-a-time in battle.
     aceCard: {
-      // "Show Answer". Price per purchase doubles each time you buy
-      // (2, 4, 8, 16, 32, …) — using them doesn't reduce the price, only
-      // buying does, and the count only ever climbs back toward maxStock.
+      // "Show Answer". Price = baseCost * 2^(cards currently held), so with
+      // baseCost 2 that's 2, 4, 8, 16, 32… as you hold more. It's tied to
+      // what you're holding right now, not a running purchase count — spend
+      // them down to 0 and the next one is back to base price.
       baseCost: 2,
       maxStock: 10,
     },

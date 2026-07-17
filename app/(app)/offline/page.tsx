@@ -93,7 +93,7 @@ export default function OfflinePage() {
     inventory, useAceCard, useConfidencePill,
     topics, topicsLoading, saveCustomTopic,
     pinnedTopicIds, toggleTopicPin, deleteTopic,
-    roundOptions, defaultRounds, cheatTapEnabled, requestNavigation, settingsLoaded,
+    roundOptions, defaultRounds, requestNavigation, settingsLoaded,
     apiError, setApiError,
   } = useGame();
 
@@ -141,29 +141,14 @@ export default function OfflinePage() {
   const [shakeO, setShakeO] = useState(false);
   const [dmgFloat, setDmgFloat] = useState<{ val: number; who: "player" | "opp" } | null>(null);
 
-  const [hintsLeft, setHintsLeft] = useState(GAME_CONFIG.hint.perRound);
   const [hintData, setHintData] = useState<any>(null);
+  const [hintRound, setHintRound] = useState<number | null>(null); // which round hintData was generated for — reused on repeat opens within the same round instead of re-calling the AI
   const [showHint, setShowHint] = useState(false);
   const [showAns, setShowAns] = useState(false);
   const [ansData, setAnsData] = useState<any>(null);
   const [pendingOppDamage, setPendingOppDamage] = useState<any>(null);
 
   const textRef = useRef<HTMLTextAreaElement | null>(null);
-
-  // ── EASTER EGG: 5 consecutive taps on the Debucks counter -> 10,000 ──
-  const coinTapCountRef = useRef(0);
-  const coinTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  function handleCoinTap() {
-    if (!cheatTapEnabled) return;
-    coinTapCountRef.current += 1;
-    if (coinTapTimerRef.current) clearTimeout(coinTapTimerRef.current);
-    coinTapTimerRef.current = setTimeout(() => { coinTapCountRef.current = 0; }, 800);
-    if (coinTapCountRef.current >= 5) {
-      coinTapCountRef.current = 0;
-      upProfile({ coins: 10000 });
-    }
-  }
 
   // ── SAVE MATCH RESULT ──
   // Fires once, the moment the Result page is reached. Guarded by a ref so
@@ -291,7 +276,7 @@ export default function OfflinePage() {
     setPage("battle"); setRound(1); setPPts(0); setOPts(0);
     setPHP(100); setOHP(opp.maxHP); setHistory([]); setLastEval(null); setInput(""); 
     setNextOppArg(""); setEmotion("neutral"); setShowAns(false); setAnsData(null);
-    setHintsLeft(GAME_CONFIG.hint.perRound); setHintData(null); setShowHint(false);
+    setHintRound(null); setHintData(null); setShowHint(false);
     setPendingOppDamage(null); setApiError("");
     
     setPhase("loading"); setLoadMsg("Preparing opening argument…");
@@ -373,12 +358,19 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
       const op2 = clamp(ev.opponent_penalty || 0, 0, GAME_CONFIG.scoring.maxOppPenalty);
       const oNet = Math.max(0, og - op2);
 
-      // Player's damage to the opponent uses the flat, game-wide multiplier —
-      // it's not something any one debot's stats should affect.
+      // Player's damage to the opponent's HP uses the flat, game-wide
+      // multiplier — it's not something any one debot's stats should
+      // affect. This paces the HP bar; it is NOT the score. Points scored
+      // (pPts) use the judge's raw `net` directly, same number shown in
+      // the "Gain − Penalty = net" breakdown, so the score you see always
+      // matches the math you see. Multiplying points down to HP-damage
+      // size (as this used to do) made every hit look tiny regardless of
+      // how good the argument actually was — a "Strong" 30-net hit was
+      // displayed as "+15", which never matched its own label.
       const calculatedNewOHP = Math.max(0, oHP - Math.floor(net * GAME_CONFIG.damage.playerMultiplier));
       const playerDmgDealt = oHP - calculatedNewOHP;
       setOHP(calculatedNewOHP);
-      setPPts(x => x + playerDmgDealt);
+      setPPts(x => x + net);
       if (net > 8) shakeEl("opp", net);
 
       // Set emotional reaction based on damage taken
@@ -386,23 +378,34 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
       else if (net >= 15) setEmotion("angry");
       else setEmotion("neutral");
 
-      // Save opponent's upcoming counter-damage for Phase 2 — this is where
-      // the per-debot "Damage multiplier" (opp.multiplier) actually belongs,
-      // since it's this debot's own attack against the player. dmgDealt is
-      // tracked separately from oNet (the score) specifically so the UI can
-      // display the real, multiplied HP damage instead of the raw score —
-      // showing the raw score there was what made the multiplier look broken.
+      // Save opponent's upcoming counter-damage for Phase 2 — same split as
+      // above: oNet is the score, dmgDealt is only how much HP it costs.
       const oppDmgMultiplier = opp.multiplier ?? GAME_CONFIG.damage.opponentMultiplier;
       const newPHP = Math.max(0, pHP - Math.floor(oNet * oppDmgMultiplier));
       const oppDmgDealt = pHP - newPHP;
       setPendingOppDamage({ oNet, newPHP, dmgDealt: oppDmgDealt });
-      
+
+      // The AI is asked to self-report `impact` from its own gain/penalty,
+      // but the client independently clamps those (and can zero them out
+      // entirely via the low-effort backstop) — trusting the AI's label
+      // after that meant the badge could say "Solid"/"Strong" even when
+      // the actual, final net was 0. Recompute it here from the same
+      // thresholds given in the prompt so the label always matches the
+      // number actually shown.
+      const impact =
+        lowEffort ? "Ineffective" :
+        net >= 35 ? "Devastating" :
+        net >= 25 ? "Strong" :
+        net >= 14 ? "Solid" :
+        net >= 5 ? "Weak" : "Ineffective";
+
       const full = {
         ...ev,
         gain: g,
         penalty: p,
         net,
         oNet,
+        impact,
         dmgDealt: playerDmgDealt,
         critique: lowEffort ? "That didn't actually engage with the argument — try addressing their point directly." : ev.critique,
       };
@@ -423,7 +426,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
        // was previously skipped entirely, silently dropping the KO round
        // from both the Result breakdown and the saved match history). No
        // opponent counter-attack since they're already beaten, so oNet is 0.
-       setHistory(prev => [...prev, { round, oppArg, pArg: input, eval: lastEval, net: lastEval.net, oNet: 0, points: lastEval.dmgDealt ?? lastEval.net, oPoints: 0 }]);
+       setHistory(prev => [...prev, { round, oppArg, pArg: input, eval: lastEval, net: lastEval.net, oNet: 0, points: lastEval.net, oPoints: 0 }]);
        setTimeout(() => { setEmotion("defeated"); setPage("result"); }, 600);
        return;
     }
@@ -433,26 +436,35 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
     
     // Apply opponent damage
     setPHP(pendingOppDamage.newPHP);
-    setOPts(x => x + pendingOppDamage.dmgDealt);
+    setOPts(x => x + pendingOppDamage.oNet);
     if (pendingOppDamage.oNet > 10) shakeEl("player", pendingOppDamage.oNet);
 
     if (pendingOppDamage.oNet > 18) setEmotion("confident");
     else setEmotion("neutral");
 
-    setHistory(prev => [...prev, { round, oppArg, pArg: input, eval: lastEval, net: lastEval.net, oNet: pendingOppDamage.oNet, points: lastEval.dmgDealt ?? lastEval.net, oPoints: pendingOppDamage.dmgDealt ?? pendingOppDamage.oNet }]);
+    setHistory(prev => [...prev, { round, oppArg, pArg: input, eval: lastEval, net: lastEval.net, oNet: pendingOppDamage.oNet, points: lastEval.net, oPoints: pendingOppDamage.oNet }]);
   }
   
-  // ── LIFELINES (Hint) & ITEMS (Ace Card, Confidence Pill) ──
-  async function getHint() {
-    if (!inventory.insightLens || hintsLeft <= 0 || phase !== "player-turn") return;
-    setHintsLeft(h => h - 1); setPhase("loading"); setLoadMsg("Analysing opponent argument…");
+  // ── ITEMS (Insight, Ace Card, Confidence Pill) ──
+  // Insight (formerly "Hint") — unlimited uses once the Insight Lens is
+  // owned, but the analysis is per-round, not per-tap: closing and
+  // reopening it in the same round just re-shows what's already cached
+  // instead of burning another AI call for an identical answer.
+  async function getInsight() {
+    if (!inventory.insightLens || phase !== "player-turn") return;
+
+    if (showHint) { setShowHint(false); return; } // second tap same round: just close it
+
+    if (hintData && hintRound === round) { setShowHint(true); return; } // cached — no AI call
+
+    setPhase("loading"); setLoadMsg("Analysing opponent argument…");
     const sys = `You are a debate coach. Identify logical fallacies and weak points in: "${oppArg}". Return ONLY JSON:
 {"fallacies":[{"type":"name","text":"exact short phrase"}],"weak_points":["phrase1","phrase2"]}`;
     try {
       const d = JSON.parse(extractJSON(await callAI(sys, "Identify fallacies and weak points.")));
-      setHintData(d); setShowHint(true);
+      setHintData(d); setHintRound(round); setShowHint(true);
     } catch {
-      setApiError("Failed to generate hint.");
+      setApiError("Failed to generate insight.");
     }
     setPhase("player-turn");
   }
@@ -493,7 +505,6 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
     setRound(r => r + 1);
     setInput("");
     setLastEval(null);
-    setHintsLeft(1);
     setPhase("player-turn");
     setTimeout(() => textRef.current?.focus(), 200);
   }
@@ -519,7 +530,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
           <div style={{ flex: 1 }} />
           <button className="btn btn-ghost btn-sm" style={{ fontSize: 12, color: "var(--muted)", cursor: "default" }}>{profile.name}</button>
-          <span className="badge" onClick={handleCoinTap} style={{ background: "var(--amber-soft)", color: "var(--amber)" }}><DebucksIcon style={{ marginRight: 4 }} />{profile.coins}</span>
+          <span className="badge" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}><DebucksIcon style={{ marginRight: 4 }} />{profile.coins}</span>
         </div>
 
         <h2 className="heading" style={{ fontSize: 30, marginBottom: 22 }}>Select Debot</h2>
@@ -751,7 +762,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
             <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }} onClick={() => requestNavigation(() => setPage("setup"))}>← Exit</button>
             <div style={{ fontSize: 12, color: "var(--muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{activeTopic?.text}"</div>
             <span className="badge" style={{ background: "var(--faint)", color: "var(--muted)" }}>R {round}/{rounds}</span>
-            <span className="badge" onClick={handleCoinTap} style={{ background: "var(--amber-soft)", color: "var(--amber)" }}><DebucksIcon style={{ marginRight: 4 }} />{profile.coins}</span>
+            <span className="badge" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}><DebucksIcon style={{ marginRight: 4 }} />{profile.coins}</span>
           </div>
           <AdvBar pPts={pPts} oPts={oPts} pLabel={profile.name} oLabel={opp?.name} />
         </div>
@@ -828,8 +839,8 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
                 <div style={{ display: "flex", gap: 5 }}>{lastEval.tags?.map((t: any, i: number) => <span key={i} className="badge" style={{ background: "var(--surface2)", fontSize: 11 }}>{t}</span>)}</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 16, fontWeight: 600, color: "var(--blue)" }}>+{lastEval.dmgDealt ?? lastEval.net} Pts</div>
-                <div style={{ fontSize: 12, color: "var(--muted)" }}>−{lastEval.dmgDealt ?? lastEval.net} HP</div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: "var(--blue)" }}>+{lastEval.net} Pts</div>
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>−{lastEval.dmgDealt} HP</div>
               </div>
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", fontStyle: "italic", marginBottom: 14 }}>"{lastEval.critique}"</div>
@@ -843,8 +854,8 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                <div className="heading" style={{ fontSize: 20, color: "var(--red)" }}>Debot Retaliation</div>
                <div style={{ textAlign: "right" }}>
-                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--red)" }}>+{pendingOppDamage.dmgDealt ?? pendingOppDamage.oNet} Pts</div>
-                 <div style={{ fontSize: 12, color: "var(--muted)" }}>−{pendingOppDamage.dmgDealt ?? pendingOppDamage.oNet} HP</div>
+                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--red)" }}>+{pendingOppDamage.oNet} Pts</div>
+                 <div style={{ fontSize: 12, color: "var(--muted)" }}>−{pendingOppDamage.dmgDealt} HP</div>
                </div>
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>The debot fired back, dealing damage to your HP.</div>
@@ -852,11 +863,11 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
           </div>
         )}
 
-        {/* Hint Panel */}
+        {/* Insight Panel */}
         {showHint && hintData && phase === "player-turn" && (
           <div className="card anim-fade-up" style={{ padding: 14, borderColor: "rgba(245,166,35,0.3)", background: "var(--amber-soft)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <span style={{ fontSize: 12, color: "var(--amber)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>💡 Hint</span>
+              <span style={{ fontSize: 12, color: "var(--amber)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>🔍 Insight</span>
               <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setShowHint(false)}>×</button>
             </div>
             {hintData.fallacies?.map((f: any, i: number) => <div key={i} style={{ fontSize: 12, color: "var(--red)", marginBottom: 4 }}>⚠ <b>{f.type}</b>: "{f.text}"</div>)}
@@ -882,9 +893,12 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
           </div>
         )}
 
-        {/* Items — spend Ace Cards / Confidence Pills bought in the Store */}
+        {/* Items — Insight (unlimited while owned), Ace Cards / Confidence Pills bought in the Store */}
         {phase === "player-turn" && (
           <ItemsBar
+            hasInsightLens={inventory.insightLens}
+            insightActive={showHint}
+            onUseInsight={getInsight}
             aceCards={inventory.aceCards}
             confidencePills={inventory.confidencePills}
             onUseAce={getAns}
@@ -899,9 +913,6 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
             setInput={setInput}
             onSend={submitArg}
             isEvaluating={false}
-            onHint={getHint}
-            hintsLeft={hintsLeft}
-            hasInsightLens={inventory.insightLens}
             curSide={curSide}
             round={round}
             rounds={rounds}

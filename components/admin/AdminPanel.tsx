@@ -723,7 +723,10 @@ function SettingsAdmin() {
   const [cheatEnabled, setCheatEnabled] = useState(true);
   const [landingBgUrl, setLandingBgUrl] = useState<string | null>(null);
   const [bgOpacity, setBgOpacity] = useState(0.16);
+  const [bgApplyEverywhere, setBgApplyEverywhere] = useState(false);
   const [bgUploading, setBgUploading] = useState(false);
+  const DEFAULT_SUBTEXT = "It's not about being right.\nIt's about being logical.";
+  const [landingSubtext, setLandingSubtext] = useState(DEFAULT_SUBTEXT);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
 
@@ -732,7 +735,7 @@ function SettingsAdmin() {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere", "landing_subtext"]);
 
     if (error) {
       setStatus(`Failed to load: ${error.message}. Have you run app_settings.sql / debots_redesign.sql yet?`);
@@ -748,6 +751,8 @@ function SettingsAdmin() {
     setCheatEnabled(map.debucks_cheat_enabled !== false);
     setLandingBgUrl(typeof map.landing_bg_url === "string" ? map.landing_bg_url : null);
     setBgOpacity(typeof map.landing_bg_opacity === "number" ? map.landing_bg_opacity : 0.16);
+    setBgApplyEverywhere(map.bg_apply_everywhere === true);
+    setLandingSubtext(typeof map.landing_subtext === "string" && map.landing_subtext.trim() ? map.landing_subtext : DEFAULT_SUBTEXT);
     setLoading(false);
   }
 
@@ -834,6 +839,8 @@ function SettingsAdmin() {
       { key: "rounds_options", value: parsedOptions },
       { key: "rounds_default", value: Number(roundsDefault) || parsedOptions[0] },
       { key: "debucks_cheat_enabled", value: cheatEnabled },
+      { key: "bg_apply_everywhere", value: bgApplyEverywhere },
+      { key: "landing_subtext", value: landingSubtext.trim() ? landingSubtext : DEFAULT_SUBTEXT },
     ];
     // Vertices is optional — leaving it blank means "let each debot keep its
     // own shape" rather than forcing one on the whole catalog.
@@ -923,6 +930,34 @@ function SettingsAdmin() {
         <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
           Applies immediately when you release the slider — no need to hit Save settings.
         </div>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+          <input type="checkbox" checked={bgApplyEverywhere} onChange={(e) => setBgApplyEverywhere(e.target.checked)} style={{ accentColor: "var(--blue)" }} />
+          Also use this background on every other page, not just landing
+        </label>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+          Uses the same image and opacity set above. This one's part of "Save settings" below, not immediate.
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 24, marginBottom: 8 }}>
+        Landing Page Subtext
+      </div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+        The line under the Debatto logo. Use a line break for a second line — the last word of the last line is bolded automatically, same as the original.
+      </div>
+      <textarea
+        className="textarea"
+        rows={2}
+        value={landingSubtext}
+        onChange={(e) => setLandingSubtext(e.target.value)}
+        placeholder={DEFAULT_SUBTEXT}
+        style={{ width: "100%" }}
+      />
+      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+        Part of "Save settings" below, not immediate.
       </div>
     </div>
   );

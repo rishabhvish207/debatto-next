@@ -12,8 +12,13 @@
 // Items are split into two categories — Consumable and Gear. The category
 // *labels* are pulled from one constant (ITEM_CATEGORIES) specifically so
 // renaming "Gears" later is a one-line change.
+//
+// Two levels of tabs on one screen (Themes/Items, then Consumable/Gear)
+// read as one confusing row unless they're visually unequal — the section
+// switch is styled as a real top-level tab strip (underline, bigger type),
+// the category switch as a small subordinate pill group nested under it.
 
-import { useState, ReactNode } from "react";
+import { useState, useRef, ReactNode } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
 import { GAME_CONFIG } from "@/config/Game";
@@ -33,8 +38,9 @@ type Section = "themes" | "items";
 
 export default function StorePage() {
   const {
-    profile, inventory, inventoryLoading,
+    profile, upProfile, inventory, inventoryLoading,
     aceCardPrice, buyInsightLens, buyAceCard, buyConfidencePill,
+    cheatTapEnabled,
   } = useGame();
 
   const [section, setSection] = useState<Section>("items");
@@ -42,27 +48,50 @@ export default function StorePage() {
 
   const { insightLens: insightLensCfg, aceCard: aceCardCfg, confidencePill: pillCfg } = GAME_CONFIG.store;
 
-  const nextAcePrice = aceCardPrice(inventory.acePurchases);
+  const nextAcePrice = aceCardPrice(inventory.aceCards);
   const aceAtMax = inventory.aceCards >= aceCardCfg.maxStock;
   const pillAtMax = inventory.confidencePills >= pillCfg.maxStock;
 
+  // ── EASTER EGG: 5 consecutive taps on the Debucks counter -> 10,000 ──
+  // Moved here from the battle screen — this is now the only place it works.
+  const coinTapCountRef = useRef(0);
+  const coinTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function handleCoinTap() {
+    if (!cheatTapEnabled) return;
+    coinTapCountRef.current += 1;
+    if (coinTapTimerRef.current) clearTimeout(coinTapTimerRef.current);
+    coinTapTimerRef.current = setTimeout(() => { coinTapCountRef.current = 0; }, 800);
+    if (coinTapCountRef.current >= 5) {
+      coinTapCountRef.current = 0;
+      upProfile({ coins: 10000 });
+    }
+  }
+
   return (
     <div className="root" style={{ padding: "20px 16px", maxWidth: 640, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
         <h2 className="heading" style={{ fontSize: 26 }}>Store</h2>
-        <span className="badge" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}>
+        <span className="badge" onClick={handleCoinTap} style={{ background: "var(--amber-soft)", color: "var(--amber)", cursor: "default" }}>
           <DebucksIcon style={{ marginRight: 4 }} />{profile.coins}
         </span>
       </div>
 
-      {/* Section tabs — Themes / Items */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+      {/* Section tabs — Themes / Items. Top-level nav: underline indicator,
+          bigger uppercase type, full-bleed border — reads as "this is the
+          primary switch on this screen". */}
+      <div style={{ display: "flex", gap: 24, marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
         {(["items", "themes"] as Section[]).map((s) => (
           <button
             key={s}
-            className={`btn btn-sm ${section === s ? "btn-primary" : "btn-ghost"}`}
             onClick={() => setSection(s)}
-            style={{ flex: 1, textTransform: "capitalize" }}
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              padding: "0 2px 12px", fontSize: 15, fontWeight: 700,
+              letterSpacing: "0.03em", textTransform: "uppercase",
+              color: section === s ? "var(--text)" : "var(--muted)",
+              borderBottom: section === s ? "2px solid var(--blue)" : "2px solid transparent",
+              marginBottom: -1,
+            }}
           >
             {s}
           </button>
@@ -89,18 +118,30 @@ export default function StorePage() {
 
       {section === "items" && (
         <>
-          {/* Category tabs — Consumable / Gear */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-            {Object.values(ITEM_CATEGORIES).map((c) => (
-              <button
-                key={c.key}
-                className={`btn btn-sm ${category === c.key ? "btn-primary" : "btn-ghost"}`}
-                onClick={() => setCategory(c.key)}
-                style={{ flex: 1 }}
-              >
-                {c.label}
-              </button>
-            ))}
+          {/* Category tabs — Consumable / Gear. Deliberately a small,
+              subordinate pill group (not full-width buttons like the
+              section tabs above) so it visibly nests under "Items" rather
+              than competing with it for attention. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
+            <span style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Category
+            </span>
+            <div style={{ display: "inline-flex", gap: 4, background: "var(--faint)", borderRadius: 999, padding: 3 }}>
+              {Object.values(ITEM_CATEGORIES).map((c) => (
+                <button
+                  key={c.key}
+                  onClick={() => setCategory(c.key)}
+                  style={{
+                    border: "none", cursor: "pointer", borderRadius: 999,
+                    padding: "5px 12px", fontSize: 12, fontWeight: 600,
+                    background: category === c.key ? "var(--surface2)" : "transparent",
+                    color: category === c.key ? "var(--text)" : "var(--muted)",
+                  }}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {inventoryLoading ? (
@@ -111,7 +152,7 @@ export default function StorePage() {
                 icon="🔍"
                 name="Insight Lens"
                 categoryLabel={ITEM_CATEGORIES.gear.label}
-                description="Permanently unlocks the Hint lifeline in every match — see the opponent's weak points and fallacies as you debate. Buy it once; it's yours for good."
+                description="Permanently unlocks the Insight lifeline in every match — see the opponent's weak points and fallacies as you debate, as many times as you want. Buy it once; it's yours for good."
                 footer={
                   inventory.insightLens
                     ? <span style={{ fontSize: 12, color: "var(--green, #5dbb8a)", fontWeight: 600 }}>✓ Owned — permanent</span>
@@ -152,7 +193,7 @@ export default function StorePage() {
               </ItemCard>
 
               <div style={{ fontSize: 11, color: "var(--muted)", marginTop: -6, marginBottom: -2, paddingLeft: 2 }}>
-                Price doubles with every purchase (next one after this: <DebucksIcon style={{ marginLeft: 1, marginRight: 1 }} />{nextAcePrice * 2}) — using cards doesn't raise the price, only buying does.
+                Price depends on how many you're holding right now (next after this: <DebucksIcon style={{ marginLeft: 1, marginRight: 1 }} />{aceCardPrice(Math.min(inventory.aceCards + 1, aceCardCfg.maxStock))}) — using cards brings it back down, buying pushes it up.
               </div>
 
               <ItemCard

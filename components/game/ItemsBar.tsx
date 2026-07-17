@@ -1,23 +1,39 @@
 import React from "react";
 
-// Shown during the player's turn so purchased consumables (Ace Cards,
-// Confidence Pills) can actually be spent mid-match. Deliberately separate
-// from InputPanel's lifelines row — those are per-round abilities (Hint),
-// this is inventory the player stocked up on in the Store beforehand.
-export function ItemsBar({ aceCards, confidencePills, onUseAce, onUseConfidence, disabled }: {
+// Shown during the player's turn so purchased items can actually be used
+// mid-match. Insight (formerly the "Hint" lifeline) lives here now too —
+// it's unlimited-use once the Insight Lens is owned from the Store, same
+// spyglass icon as the Store listing, so the two are visibly the same item.
+export function ItemsBar({
+  hasInsightLens, insightActive, onUseInsight,
+  aceCards, confidencePills, onUseAce, onUseConfidence,
+  disabled,
+}: {
+  hasInsightLens: boolean;
+  insightActive?: boolean;
+  onUseInsight: () => void;
   aceCards: number;
   confidencePills: number;
   onUseAce: () => void;
   onUseConfidence: () => void;
   disabled?: boolean;
 }) {
-  const empty = aceCards <= 0 && confidencePills <= 0;
+  const empty = aceCards <= 0 && confidencePills <= 0 && !hasInsightLens;
 
   return (
     <div className="card" style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
       <span style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
         Items
       </span>
+
+      <button
+        className={`btn btn-sm ${insightActive ? "btn-amber" : "btn-ghost"}`}
+        disabled={disabled || !hasInsightLens}
+        onClick={onUseInsight}
+        title={hasInsightLens ? "Analyse the opponent's argument for weak points" : "Buy the Insight Lens in the Store to unlock this"}
+      >
+        {hasInsightLens ? "🔍 Insight" : "🔍 Insight 🔒"}
+      </button>
 
       <button
         className="btn btn-ghost btn-sm"

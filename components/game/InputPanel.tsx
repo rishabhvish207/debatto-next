@@ -2,7 +2,6 @@ import React from "react";
 
 export function InputPanel({
   input, setInput, onSend, isEvaluating,
-  onHint, hintsLeft, hasInsightLens,
   curSide = "", round = 1, rounds = 10,
   textRef
 }: any) {
@@ -35,36 +34,16 @@ export function InputPanel({
         style={{ marginBottom: 10 }}
       />
 
-      {/* Action row */}
-      <div style={{
-        display: "flex", justifyContent: "space-between",
-        alignItems: "center", flexWrap: "wrap", gap: 8
-      }}>
-
-        {/* Lifelines */}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button
-            className="btn btn-amber btn-sm"
-            disabled={!hasInsightLens || hintsLeft <= 0 || isEvaluating}
-            onClick={onHint}
-            title={!hasInsightLens ? "Buy the Insight Lens in the Store to unlock hints" : undefined}
-          >
-            {hasInsightLens ? `💡 Hint (${hintsLeft})` : "💡 Hint 🔒"}
-          </button>
-        </div>
-
-        {/* Submit */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 11, color: "var(--muted)" }}>Ctrl + ↵</span>
-          <button
-            className="btn btn-primary"
-            disabled={!canSubmit}
-            onClick={onSend}
-          >
-            Submit →
-          </button>
-        </div>
-
+      {/* Submit */}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 11, color: "var(--muted)" }}>Ctrl + ↵</span>
+        <button
+          className="btn btn-primary"
+          disabled={!canSubmit}
+          onClick={onSend}
+        >
+          Submit →
+        </button>
       </div>
     </div>
   );

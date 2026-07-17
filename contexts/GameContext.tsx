@@ -34,13 +34,12 @@ type Profile = {
 };
 
 type Inventory = {
-  insightLens: boolean;      // gear — one-time purchase, permanently unlocks the in-match Hint lifeline
+  insightLens: boolean;      // gear — one-time purchase, permanently unlocks the in-match Insight lifeline
   aceCards: number;          // consumable — "Show Answer", stacks up to store.aceCard.maxStock
-  acePurchases: number;      // total Ace Card purchases ever made — drives the doubling price, never decreases
   confidencePills: number;   // consumable — heals HP on use, stacks up to store.confidencePill.maxStock
 };
 
-const DEFAULT_INVENTORY: Inventory = { insightLens: false, aceCards: 0, acePurchases: 0, confidencePills: 0 };
+const DEFAULT_INVENTORY: Inventory = { insightLens: false, aceCards: 0, confidencePills: 0 };
 
 type GameContextValue = {
   user: any;
@@ -59,7 +58,7 @@ type GameContextValue = {
 
   inventory: Inventory;
   inventoryLoading: boolean;
-  aceCardPrice: (purchases?: number) => number;
+  aceCardPrice: (held?: number) => number;
   buyInsightLens: () => Promise<void>;
   buyAceCard: () => Promise<void>;
   buyConfidencePill: () => Promise<void>;
@@ -79,6 +78,7 @@ type GameContextValue = {
   settingsLoaded: boolean;
   debotVertices: number | null;
   cheatTapEnabled: boolean;
+  siteBg: { url: string | null; opacity: number; applyEverywhere: boolean };
   refetchSettings: () => Promise<void>;
   requestNavigation: (action: () => void) => void;
   pendingNavAction: boolean;
@@ -122,6 +122,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [hiddenTopicIds, setHiddenTopicIds] = useState<any[]>([]); // system topics this user has personally removed
   const [debotVertices, setDebotVertices] = useState<number | null>(null); // null = each debot uses its own
   const [cheatTapEnabled, setCheatTapEnabled] = useState<boolean>(true);
+  const [siteBg, setSiteBg] = useState<{ url: string | null; opacity: number; applyEverywhere: boolean }>({ url: null, opacity: 0.16, applyEverywhere: false });
   const [pendingNavAction, setPendingNavAction] = useState<(() => void) | null>(null);
 
   // Any navigation that might leave an in-progress match (drawer links, the
@@ -385,11 +386,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
     fetchInventory();
   }, [user]);
 
-  // Price of the *next* Ace Card purchase: doubles every purchase ever made
-  // (2, 4, 8, 16, 32, …) and never resets, regardless of how many are
-  // currently held or how many have been used.
-  function aceCardPrice(purchases: number = inventory.acePurchases): number {
-    return GAME_CONFIG.store.aceCard.baseCost * Math.pow(2, purchases);
+  // Price of the *next* Ace Card purchase: baseCost * 2^held, so with the
+  // default baseCost of 2 this is exactly 2^(held+1) — 2, 4, 8, 16, 32…
+  // Tied to how many you currently hold, not how many you've ever bought:
+  // spend them all down to 0 and the price is right back to 2.
+  function aceCardPrice(held: number = inventory.aceCards): number {
+    return GAME_CONFIG.store.aceCard.baseCost * Math.pow(2, held);
   }
 
   async function buyInsightLens() {
@@ -420,21 +422,20 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setApiError("Ace Cards are already at max stock.");
       return;
     }
-    const cost = aceCardPrice(inventory.acePurchases);
+    const cost = aceCardPrice(inventory.aceCards);
     if (profile.coins < cost) {
       setApiError("Not enough coins to buy an Ace Card.");
       return;
     }
     const nextCards = inventory.aceCards + 1;
-    const nextPurchases = inventory.acePurchases + 1;
     try {
-      const res = await saveGameData("inventory", { aceCards: nextCards, acePurchases: nextPurchases }, user);
+      const res = await saveGameData("inventory", { aceCards: nextCards }, user);
       if (!res.ok) {
         console.error(res.error);
         setApiError("Failed to purchase Ace Card. Please try again.");
         return;
       }
-      setInventory((inv) => ({ ...inv, aceCards: nextCards, acePurchases: nextPurchases }));
+      setInventory((inv) => ({ ...inv, aceCards: nextCards }));
       upProfile({ coins: profile.coins - cost });
     } catch (err) {
       console.error(err);
@@ -545,7 +546,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere"]);
 
     if (error || !data) {
       // DB fetch failed — fall back to config so the UI has *something*
@@ -564,6 +565,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
     // Defaults to enabled (true) if the key was never set, so existing guests
     // keep the behavior they always had until an admin explicitly turns it off.
     setCheatTapEnabled(map.debucks_cheat_enabled !== false);
+    setSiteBg({
+      url: typeof map.landing_bg_url === "string" && map.landing_bg_url ? map.landing_bg_url : null,
+      opacity: typeof map.landing_bg_opacity === "number" ? map.landing_bg_opacity : 0.16,
+      applyEverywhere: map.bg_apply_everywhere === true,
+    });
     setSettingsLoaded(true);
   };
 
@@ -687,6 +693,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         settingsLoaded,
         debotVertices,
         cheatTapEnabled,
+        siteBg,
         refetchSettings: fetchGameSettings,
         requestNavigation,
         pendingNavAction: !!pendingNavAction,

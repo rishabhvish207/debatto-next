@@ -7,11 +7,35 @@ import { RightDrawer } from "@/components/shell/RightDrawer";
 import { ConfirmModal } from "@/components/shell/ConfirmModal";
 
 export default function AppGroupLayout({ children }: { children: React.ReactNode }) {
-  const { apiError, setApiError, pendingNavAction, confirmNavigation, cancelNavigation } = useGame();
+  const { apiError, setApiError, pendingNavAction, confirmNavigation, cancelNavigation, siteBg } = useGame();
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const showSiteBg = siteBg.applyEverywhere && !!siteBg.url;
 
   return (
     <div>
+      {showSiteBg && (
+        <>
+          {/* Every page in this group wraps its content in a `.root` div
+              with its own opaque background — transparent it out here so
+              the fixed layers below (solid fill + image) can show through,
+              same look as the landing page's own background. */}
+          <style>{`.root { background: transparent !important; }`}</style>
+          <div aria-hidden style={{ position: "fixed", inset: 0, zIndex: -2, background: "var(--bg)" }} />
+          <div
+            aria-hidden
+            style={{
+              position: "fixed", inset: 0, zIndex: -1,
+              backgroundImage: `url(${siteBg.url})`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              backgroundAttachment: "fixed",
+              opacity: siteBg.opacity,
+            }}
+          />
+        </>
+      )}
+
       <TopBar onOpenDrawer={() => setDrawerOpen(true)} />
       {drawerOpen && <RightDrawer onClose={() => setDrawerOpen(false)} />}
 

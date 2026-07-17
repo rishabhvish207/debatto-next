@@ -39,6 +39,19 @@ async function persistSortOrder(table: "debots" | "topics" | "store_items" | "st
   );
 }
 
+// The `debots` table's `id` column (unlike store_items/store_themes) has no
+// auto-generating default in the DB — it's a plain not-null integer column,
+// so every insert has to supply one itself or Postgres rejects it. This
+// computes "one past the current highest id" client-side so creating a
+// debot from the admin panel works without a schema migration. If you'd
+// rather fix this at the DB level instead, see the README's "Fixing the
+// debots.id default" note for the SQL to add a proper identity default.
+async function withNextDebotId(payload: Record<string, any>) {
+  const { data } = await supabase.from("debots").select("id").order("id", { ascending: false }).limit(1);
+  const nextId = (data && data[0]?.id ? Number(data[0].id) : 0) + 1;
+  return { ...payload, id: nextId };
+}
+
 // Hold-and-drag reordering via Pointer Events rather than native HTML5
 // drag-and-drop — native DnD doesn't fire reliably from touch/hold gestures
 // on phones, and this admin panel is used from mobile as much as desktop.
@@ -279,7 +292,7 @@ function DebotsAdmin() {
 
     const res = editing.id
       ? await supabase.from("debots").update(payload).eq("id", editing.id).select()
-      : await supabase.from("debots").insert(payload).select().single();
+      : await supabase.from("debots").insert(await withNextDebotId(payload)).select().single();
 
     if (res.error) {
       setStatus(`Failed: ${res.error.message}`);

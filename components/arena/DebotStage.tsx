@@ -2,11 +2,6 @@ import React, { useState } from "react";
 import { DebucksIcon } from "../ui/DebucksIcon";
 import { useGame } from "@/contexts/GameContext";
 
-const OPP_HEX: Record<number, string> = {
-  1:"#5dbb8a",2:"#2dd4bf",3:"#6b9fff",4:"#a78bfa",5:"#f5a623",6:"#38bdf8",
-  7:"#ff7070",8:"#e879f9",9:"#fb923c",10:"#6b6b84",11:"#005dce",12:"#c084fc",
-};
-
 const CARD_SIZE = 92; // uniform for every debot — no more index-based scaling
 
 // SVG polygon points string. sides < 3 is handled by the caller as a circle.
@@ -76,7 +71,7 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
 
   const focusId = selectedOpp?.id ?? viewedId;
   const focus = opps.find((o: any) => o.id === focusId) || null;
-  const focusHex = focus ? OPP_HEX[focus.id] : null;
+  const focusHex = focus ? (focus.color || "#6b9fff") : null;
 
   // Clicking a card — locked or unlocked — only brings it into focus in the
   // detail panel below. It never selects and never purchases by itself.
@@ -112,7 +107,7 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
         {opps.map((o: any) => {
           const sel = selectedOpp?.id === o.id;
           const hov = hoveredId === o.id;
-          const hex = OPP_HEX[o.id] || o.color || "#6b9fff";
+          const hex = o.color || "#6b9fff";
 
           return (
             <div

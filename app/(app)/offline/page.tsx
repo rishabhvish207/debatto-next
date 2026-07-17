@@ -774,11 +774,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
 
         {/* Fighters */}
         {(() => {
-          const OPP_HEX: Record<number, string> = {
-            1:"#5dbb8a",2:"#2dd4bf",3:"#6b9fff",4:"#a78bfa",5:"#f5a623",6:"#38bdf8",
-            7:"#ff7070",8:"#e879f9",9:"#fb923c",10:"#6b6b84",11:"#005dce",12:"#c084fc"
-          };
-          const oppHex = OPP_HEX[opp?.id] || "#6b9fff";
+          const oppHex = opp?.color || "#6b9fff";
           return (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 36px 1fr", gap: 10, padding: "8px 0" }}>
 

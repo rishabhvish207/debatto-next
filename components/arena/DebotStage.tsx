@@ -2,11 +2,6 @@ import React, { useState } from "react";
 import { DebucksIcon } from "../ui/DebucksIcon";
 import { useGame } from "@/contexts/GameContext";
 
-const OPP_HEX: Record<number, string> = {
-  1:"#5dbb8a",2:"#2dd4bf",3:"#6b9fff",4:"#a78bfa",5:"#f5a623",6:"#38bdf8",
-  7:"#ff7070",8:"#e879f9",9:"#fb923c",10:"#6b6b84",11:"#005dce",12:"#c084fc",
-};
-
 const CARD_SIZE = 92; // uniform for every debot — no more index-based scaling
 
 // SVG polygon points string. sides < 3 is handled by the caller as a circle.
@@ -20,8 +15,9 @@ function polygonPts(sides: number, cx: number, cy: number, r: number): string {
 }
 
 // Shape + optional sprite image, clipped to the debot's admin-configured
-// vertex count (0/1/2 -> circle, 3-10 -> that many-sided polygon).
-function DebotShape({ o, size, sel, hov, hex, globalVertices }: { o: any; size: number; sel: boolean; hov: boolean; hex: string; globalVertices?: number | null }) {
+// vertex count (0/1/2 -> circle, 3-20 -> that many-sided polygon), with an
+// optional whole-frame rotation (0/90/180/270, admin-configurable).
+function DebotShape({ o, size, sel, hov, hex, globalVertices, rotation }: { o: any; size: number; sel: boolean; hov: boolean; hex: string; globalVertices?: number | null; rotation?: number }) {
   const rawSides = globalVertices ?? o.vertices ?? 0;
   const sides = rawSides < 3 ? 0 : rawSides;
   const r = size / 2 - 2;
@@ -32,7 +28,7 @@ function DebotShape({ o, size, sel, hov, hex, globalVertices }: { o: any; size: 
   const clipId = `debot-clip-${o.id}-${size}`;
 
   return (
-    <svg width={size} height={size} style={{ display: "block" }}>
+    <svg width={size} height={size} style={{ display: "block", transform: rotation ? `rotate(${rotation}deg)` : undefined }}>
       <defs>
         <clipPath id={clipId}>
           {sides === 0
@@ -70,13 +66,13 @@ function DebotShape({ o, size, sel, hov, hex, globalVertices }: { o: any; size: 
 }
 
 export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: any) {
-  const { debotVertices } = useGame();
+  const { debotVertices, debotShapeRotation, diffBadgeStyle } = useGame();
   const [hoveredId, setHoveredId] = useState<any>(null); // cosmetic hover glow only
   const [viewedId, setViewedId] = useState<any>(null);   // which debot the panel is showing
 
   const focusId = selectedOpp?.id ?? viewedId;
   const focus = opps.find((o: any) => o.id === focusId) || null;
-  const focusHex = focus ? OPP_HEX[focus.id] : null;
+  const focusHex = focus ? (focus.color || "#6b9fff") : null;
 
   // Clicking a card — locked or unlocked — only brings it into focus in the
   // detail panel below. It never selects and never purchases by itself.
@@ -112,7 +108,7 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
         {opps.map((o: any) => {
           const sel = selectedOpp?.id === o.id;
           const hov = hoveredId === o.id;
-          const hex = OPP_HEX[o.id] || o.color || "#6b9fff";
+          const hex = o.color || "#6b9fff";
 
           return (
             <div
@@ -132,7 +128,7 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
               onMouseLeave={() => setHoveredId(null)}
             >
               <div style={{ position: "relative" }}>
-                <DebotShape o={o} size={CARD_SIZE} sel={sel} hov={hov} hex={hex} globalVertices={debotVertices} />
+                <DebotShape o={o} size={CARD_SIZE} sel={sel} hov={hov} hex={hex} globalVertices={debotVertices} rotation={debotShapeRotation} />
                 {sel && (
                   <div style={{ position: "absolute", top: 2, right: 4, fontSize: 11, color: hex, fontWeight: 700 }}>✓</div>
                 )}
@@ -145,13 +141,11 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
                   color: o.unlocked ? "var(--text)" : "var(--muted)",
                 }}>{o.name}</div>
 
-                <span style={{
-                  display: "inline-flex", alignItems: "center",
-                  padding: "1px 6px", borderRadius: 100,
-                  fontSize: 9, fontWeight: 600,
-                  background: `${o.dc}18`, color: o.dc,
-                  marginTop: 3,
-                }}>{o.diff}</span>
+                <span style={
+                  diffBadgeStyle === "plain"
+                    ? { display: "inline-block", fontSize: 9, fontWeight: 600, color: o.dc, marginTop: 3 }
+                    : { display: "inline-flex", alignItems: "center", padding: "1px 6px", borderRadius: 100, fontSize: 9, fontWeight: 600, background: `${o.dc}18`, color: o.dc, marginTop: 3 }
+                }>{o.diff}</span>
 
                 {!o.unlocked && (
                   <div style={{ fontSize: 10, color: o.dc, marginTop: 3, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -176,14 +170,18 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
             {focus.sprite && (
               <div style={{ flexShrink: 0 }}>
-                <DebotShape o={focus} size={44} sel={false} hov={false} hex={focusHex || "#6b9fff"} globalVertices={debotVertices} />
+                <DebotShape o={focus} size={44} sel={false} hov={false} hex={focusHex || "#6b9fff"} globalVertices={debotVertices} rotation={debotShapeRotation} />
               </div>
             )}
             <div>
               <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)" }}>{focus.name}</div>
               <div style={{ fontSize: 12, color: "var(--muted)" }}>{focus.sub}</div>
             </div>
-            <span className="badge" style={{ marginLeft: "auto", background: `${focus.dc}18`, color: focus.dc, fontSize: 10 }}>
+            <span className={diffBadgeStyle === "plain" ? undefined : "badge"} style={
+              diffBadgeStyle === "plain"
+                ? { marginLeft: "auto", fontSize: 10, fontWeight: 600, color: focus.dc }
+                : { marginLeft: "auto", background: `${focus.dc}18`, color: focus.dc, fontSize: 10 }
+            }>
               {focus.diff}
             </span>
           </div>

@@ -66,7 +66,7 @@ The app expects specific tables, columns, and **Row Level Security policies** in
 - `topics` — debate topics: `title`/`text`, `category`/`cat`, `is_system` (seeded topics vs. user-submitted), `user_id`
 - `pinned_topics` — per-user topic pins: `user_id`, `topic_id`
 - `hidden_topics` — per-user topic removals (used when a user "deletes" a system topic — it's hidden for them, not removed globally): `user_id`, `topic_id`
-- `app_settings` — key/value config the admin panel edits at runtime: `rounds_options`, `rounds_default`, `debot_vertices`, `debucks_cheat_enabled`, `ai_model`, `ai_max_tokens`, `ai_temperature`, `landing_bg_url` (public URL of the landing page's background image, shown at low opacity behind the logo; empty/absent means no background image)
+- `app_settings` — key/value config the admin panel edits at runtime: `rounds_options`, `rounds_default`, `debot_vertices` (0–20 sides, blank = per-debot), `debot_shape_rotation` (0/90/180/270, rotates every debot's frame), `debot_diff_badge_style` (`badge`/`plain` — whether the difficulty label in the selection grid gets a background pill or plain text), `debucks_cheat_enabled`, `ai_model`, `ai_max_tokens`, `ai_temperature`, `landing_bg_url` (public URL of the landing page's background image, shown at low opacity behind the logo; empty/absent means no background image)
 
 ### Required RLS policies
 
@@ -271,7 +271,7 @@ create unique index if not exists profiles_player_id_key on public.profiles (pla
 - **Judge scoring** has a client-side backstop (`isLowEffortInput()`) independent of the AI's own judgment — low-effort/gibberish input gets zero gain and max penalty locally regardless of what the model returns, since LLMs tend to grade generously by default.
 - **Match reward** scales with rounds played: `opp.reward` is calibrated for `app_settings.rounds_default`, and the actual payout is `reward × (rounds played / default rounds)`.
 - **Store items** are bought with debucks in `/store` and consumed/used from `contexts/GameContext.tsx`, persisted through the `user_inventory` table (or `localStorage` for guests) — same dual-mode pattern as everything else. Insight Lens is a one-time permanent unlock (the in-match "Insight" lifeline becomes unlimited-use once owned); Ace Cards and Confidence Pills are stackable consumables capped at `maxStock`. Ace Card price follows `baseCost × 2^(cards currently held)`, so it's tied to what's in inventory right now, not a running lifetime purchase count — spending them back down to 0 resets the price to base. The item catalog — including name, icon, description, price, category, stock cap, active/inactive, and Confidence Pill's heal amount — is fully admin-editable (Admin → Store → Items); only three `key`s (`insight_lens`, `ace_card`, `confidence_pill`) have actual in-match effects wired up — any other key an admin adds shows up in the Store as "Coming soon" until a developer hooks up what it does.
-- **Themes** change the whole app's look — colors, fonts, and (if set) a background image — the moment they're equipped. `config/Themes.ts` defines the CSS custom properties a theme can override (all 18 vars from `Debatto.css`, plus `--font-heading`/`--font-body`) and ships 3 starter themes as a fallback if `store_themes` is empty. Buying/equipping goes through `GameContext`'s `buyTheme`/`equipTheme`, same ownership pattern as debots (`user_themes` join table, or local storage for guests). The equipped theme's CSS variables and Google Font (if any) are injected in `app/(app)/layout.tsx` via a plain `<style>` tag and a dynamically-added `<link>`, scoped to the authenticated app shell only — the pre-login landing page keeps its own consistent branding regardless of what any individual user has equipped. If the equipped theme has its own background image, it takes priority over the site-wide background configured in Admin → Settings; if not, the site-wide background (if enabled) still shows through. The theme catalog is fully admin-editable (Admin → Store → Themes), including a live preview while editing.
+- **Themes** change the whole app's look — colors, fonts, and (if set) a background image — the moment they're equipped, including the pre-login landing page (since `GameProvider` wraps the whole app from the root layout down, and the local/guest theme choice persists the same way as everything else). `config/Themes.ts` defines the CSS custom properties a theme can override (all 18 vars from `Debatto.css`, plus `--font-heading`/`--font-body`) and ships 3 starter themes as a fallback if `store_themes` is empty. Buying/equipping goes through `GameContext`'s `buyTheme`/`equipTheme`, same ownership pattern as debots (`user_themes` join table, or local storage for guests). Colors and fonts are applied globally by `components/shell/ThemeApplier.tsx`, mounted once in the root layout. Background image priority is handled per-surface: `app/(app)/layout.tsx` for the app shell, `components/shell/LandingThemeBg.tsx` for the landing page — if the equipped theme has its own background image, it overrides the site-wide background configured in Admin → Settings; if not, the site-wide background (if enabled) still shows through. The theme catalog is fully admin-editable (Admin → Store → Themes), including a live preview while editing.
 - **Settings flash prevention**: `roundOptions` starts empty (not a hardcoded fallback) and the Setup screen waits for `settingsLoaded` before rendering round-count buttons, so a stale default never flashes before the real admin-configured values arrive.
 
 ## Project structure
@@ -301,9 +301,19 @@ contexts/            # GameContext.tsx
 lib/                 # ai.ts (callAI), persistenceManager.ts (guest/local + Supabase persistence)
 ```
 
+### Fixing the debots.id default
+
+Unlike `store_items`/`store_themes`, the `debots` table's `id` column is a plain not-null integer with no auto-generating default — that's why creating a debot from the admin panel used to fail with `null value in column "id" violates not-null constraint`. The app now works around this by computing "one past the current highest id" client-side before inserting (see `withNextDebotId` in `AdminPanel.tsx`), so debot creation works without touching the database. If you'd rather fix it properly at the DB level instead:
+
+```sql
+alter table public.debots alter column id add generated by default as identity;
+-- Existing debots weren't inserted through that sequence, so bump it past
+-- the current max id or the next insert (from either path above) collides:
+select setval(pg_get_serial_sequence('public.debots', 'id'), (select max(id) from public.debots));
+```
+
 ## Known limitations
 
 - Browser back-button interception mid-match isn't reliable (see architecture notes above) — use the in-app Exit button, drawer, or header logo instead, all of which are guarded.
 - Online multiplayer (both random matchmaking and challenging friends) and Learning are stubs — the underlying database schema is already in place for online, but there's no queue/matchmaking UI, Realtime subscription, or live two-human battle screen yet.
 - Admin can add store items with any `key`, but only `insight_lens`, `ace_card`, and `confidence_pill` do anything in a match — a new key needs actual game-logic hooked up by a developer before it's more than cosmetic.
-- Theming applies to the authenticated app shell (`hub`, `offline`, `store`, `profile`, etc.) only — the pre-login landing page keeps one consistent look for all visitors regardless of what an individual signed-in user has equipped.

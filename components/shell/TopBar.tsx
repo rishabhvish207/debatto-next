@@ -10,7 +10,7 @@ export function TopBar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   return (
     <div className="app-topbar">
       <button
-        onClick={() => requestNavigation(() => router.push("/hub"))}
+        onClick={() => requestNavigation(() => router.push("/"))}
         className="heading"
         style={{ fontSize: 18, background: "none", border: "none", cursor: "pointer", padding: 0, color: "var(--text)" }}
       >

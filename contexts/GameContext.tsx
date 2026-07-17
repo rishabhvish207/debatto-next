@@ -91,6 +91,8 @@ type GameContextValue = {
   defaultRounds: number;
   settingsLoaded: boolean;
   debotVertices: number | null;
+  debotShapeRotation: number;
+  diffBadgeStyle: "badge" | "plain";
   cheatTapEnabled: boolean;
   siteBg: { url: string | null; opacity: number; applyEverywhere: boolean };
   refetchSettings: () => Promise<void>;
@@ -135,6 +137,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [pinnedTopicIds, setPinnedTopicIds] = useState<any[]>([]);
   const [hiddenTopicIds, setHiddenTopicIds] = useState<any[]>([]); // system topics this user has personally removed
   const [debotVertices, setDebotVertices] = useState<number | null>(null); // null = each debot uses its own
+  const [debotShapeRotation, setDebotShapeRotation] = useState<number>(0); // 0/90/180/270
+  const [diffBadgeStyle, setDiffBadgeStyle] = useState<"badge" | "plain">("badge");
   const [cheatTapEnabled, setCheatTapEnabled] = useState<boolean>(true);
   const [siteBg, setSiteBg] = useState<{ url: string | null; opacity: number; applyEverywhere: boolean }>({ url: null, opacity: 0.16, applyEverywhere: false });
   const [pendingNavAction, setPendingNavAction] = useState<(() => void) | null>(null);
@@ -707,7 +711,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debot_shape_rotation", "debot_diff_badge_style", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere"]);
 
     if (error || !data) {
       // DB fetch failed — fall back to config so the UI has *something*
@@ -723,6 +727,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
     setRoundOptions(Array.isArray(map.rounds_options) && map.rounds_options.length ? map.rounds_options : GAME_CONFIG.rounds.options);
     setDefaultRounds(typeof map.rounds_default === "number" ? map.rounds_default : GAME_CONFIG.rounds.default);
     setDebotVertices(typeof map.debot_vertices === "number" ? map.debot_vertices : null);
+    setDebotShapeRotation(typeof map.debot_shape_rotation === "number" ? map.debot_shape_rotation : 0);
+    setDiffBadgeStyle(map.debot_diff_badge_style === "plain" ? "plain" : "badge");
     // Defaults to enabled (true) if the key was never set, so existing guests
     // keep the behavior they always had until an admin explicitly turns it off.
     setCheatTapEnabled(map.debucks_cheat_enabled !== false);
@@ -863,6 +869,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         defaultRounds,
         settingsLoaded,
         debotVertices,
+        debotShapeRotation,
+        diffBadgeStyle,
         cheatTapEnabled,
         siteBg,
         refetchSettings: fetchGameSettings,

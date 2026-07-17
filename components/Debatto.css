@@ -11,15 +11,17 @@
   --amber:#f5a623;--amber-soft:rgba(245,166,35,0.12);
   --green:#5dbb8a;--green-soft:rgba(93,187,138,0.12);
   --purple:#a78bfa; --teal:#2dd4bf;
+  --font-heading:'Playfair Display', serif;
+  --font-body:'DM Sans', sans-serif;
   --r:10px; --rs:6px;
 }
 body{background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
-.root{min-height:100vh;font-family:'DM Sans',sans-serif;background:var(--bg);line-height:1.5}
+.root{min-height:100vh;font-family:var(--font-body);background:var(--bg);line-height:1.5}
 ::-webkit-scrollbar{width:5px}
 ::-webkit-scrollbar-track{background:var(--surface)}
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
 
-.heading{font-family:'Playfair Display',serif;line-height:1.1;letter-spacing:-0.02em}
+.heading{font-family:var(--font-heading);line-height:1.1;letter-spacing:-0.02em}
 
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r)}
 .card-hover{transition:border-color .18s,background .18s,transform .14s;cursor:pointer}

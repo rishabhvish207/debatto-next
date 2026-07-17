@@ -1,20 +1,55 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { TopBar } from "@/components/shell/TopBar";
 import { RightDrawer } from "@/components/shell/RightDrawer";
 import { ConfirmModal } from "@/components/shell/ConfirmModal";
 
 export default function AppGroupLayout({ children }: { children: React.ReactNode }) {
-  const { apiError, setApiError, pendingNavAction, confirmNavigation, cancelNavigation, siteBg } = useGame();
+  const { apiError, setApiError, pendingNavAction, confirmNavigation, cancelNavigation, siteBg, equippedTheme } = useGame();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const showSiteBg = siteBg.applyEverywhere && !!siteBg.url;
+  // A theme's own custom Google Font (if it has one) is loaded on demand
+  // rather than baked into Debatto.css, since only a handful of themes will
+  // ever be equipped at once and most people will never touch this.
+  useEffect(() => {
+    const href = equippedTheme?.googleFontUrl;
+    if (!href) return;
+    const id = "theme-google-font";
+    let link = document.getElementById(id) as HTMLLinkElement | null;
+    if (!link) {
+      link = document.createElement("link");
+      link.id = id;
+      link.rel = "stylesheet";
+      document.head.appendChild(link);
+    }
+    if (link.href !== href) link.href = href;
+  }, [equippedTheme?.googleFontUrl]);
+
+  // A theme's own background image takes priority over the admin's
+  // site-wide background — a themed look shouldn't get overridden by
+  // whatever's configured in Admin → Settings.
+  const themeBgUrl = equippedTheme?.backgroundImageUrl || null;
+  const bgUrl = themeBgUrl || (siteBg.applyEverywhere ? siteBg.url : null);
+  const bgOpacity = themeBgUrl ? (equippedTheme?.backgroundOpacity ?? 0.16) : siteBg.opacity;
+  const showBg = !!bgUrl;
+
+  const c = equippedTheme?.colors;
+  const themeVarsCss = c
+    ? `:root{--bg:${c.bg};--surface:${c.surface};--surface2:${c.surface2};` +
+      `--border:${c.border};--border2:${c.border2};--text:${c.text};--muted:${c.muted};--faint:${c.faint};` +
+      `--blue:${c.blue};--blue-soft:${c.blueSoft};--red:${c.red};--red-soft:${c.redSoft};` +
+      `--amber:${c.amber};--amber-soft:${c.amberSoft};--green:${c.green};--green-soft:${c.greenSoft};` +
+      `--purple:${c.purple};--teal:${c.teal};` +
+      `--font-heading:${equippedTheme!.fontHeading};--font-body:${equippedTheme!.fontBody};}`
+    : "";
 
   return (
     <div>
-      {showSiteBg && (
+      {themeVarsCss && <style>{themeVarsCss}</style>}
+
+      {showBg && (
         <>
           {/* Every page in this group wraps its content in a `.root` div
               with its own opaque background — transparent it out here so
@@ -26,11 +61,11 @@ export default function AppGroupLayout({ children }: { children: React.ReactNode
             aria-hidden
             style={{
               position: "fixed", inset: 0, zIndex: -1,
-              backgroundImage: `url(${siteBg.url})`,
+              backgroundImage: `url(${bgUrl})`,
               backgroundSize: "cover",
               backgroundPosition: "center",
               backgroundAttachment: "fixed",
-              opacity: siteBg.opacity,
+              opacity: bgOpacity,
             }}
           />
         </>

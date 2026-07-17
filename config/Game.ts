@@ -52,3 +52,73 @@ export const GAME_CONFIG = {
     },
   },
 };
+
+// Fallback item catalog used only when the `store_items` table hasn't been
+// migrated yet (or the fetch fails) — GameContext prefers the DB version.
+// These three `key`s are load-bearing: the in-match logic in
+// app/(app)/offline/page.tsx and the purchase functions in GameContext.tsx
+// check inventory.insightLens / inventory.aceCards / inventory.confidencePills
+// directly, so an admin-created item only *does* something in a match if its
+// key matches one of these three. Everything else about an item (name, icon,
+// description, price, category, active/inactive) is fully editable in
+// Admin → Store → Items, and deleting + re-adding one of these three keys
+// with the values below restores it exactly as it shipped.
+export type StoreItemDef = {
+  key: string;
+  category: "gear" | "consumable";
+  name: string;
+  icon: string;
+  description: string;
+  pricingType: "flat" | "scaling";
+  baseCost: number;
+  priceMultiplier: number;
+  maxStock: number | null;
+  healAmount: number; // HP restored on use — 0 for items that don't heal
+  active: boolean;
+  sortOrder: number;
+};
+
+export const DEFAULT_STORE_ITEMS: StoreItemDef[] = [
+  {
+    key: "insight_lens",
+    category: "gear",
+    name: "Insight Lens",
+    icon: "🔍",
+    description: "Permanently unlocks the Insight lifeline in every match — see the opponent's weak points and fallacies as you debate, as many times as you want. Buy it once; it's yours for good.",
+    pricingType: "flat",
+    baseCost: GAME_CONFIG.store.insightLens.cost,
+    priceMultiplier: 1,
+    maxStock: null,
+    healAmount: 0,
+    active: true,
+    sortOrder: 0,
+  },
+  {
+    key: "ace_card",
+    category: "consumable",
+    name: "Ace Card",
+    icon: "🂡",
+    description: "Reveals 3 AI-suggested responses to the opponent's argument — pick one and use it as-is, or as a starting point. Consumed on use.",
+    pricingType: "scaling",
+    baseCost: GAME_CONFIG.store.aceCard.baseCost,
+    priceMultiplier: 2,
+    maxStock: GAME_CONFIG.store.aceCard.maxStock,
+    healAmount: 0,
+    active: true,
+    sortOrder: 1,
+  },
+  {
+    key: "confidence_pill",
+    category: "consumable",
+    name: "Confidence Pill",
+    icon: "💊",
+    description: "Restores +10 HP the moment you take it. Consumed on use.",
+    pricingType: "flat",
+    baseCost: GAME_CONFIG.store.confidencePill.cost,
+    priceMultiplier: 1,
+    maxStock: GAME_CONFIG.store.confidencePill.maxStock,
+    healAmount: GAME_CONFIG.store.confidencePill.healAmount,
+    active: true,
+    sortOrder: 2,
+  },
+];

@@ -91,6 +91,7 @@ export default function OfflinePage() {
     battleActive, setBattleActive,
     opps, oppsLoading, unlockDebot,
     inventory, useAceCard, useConfidencePill,
+    storeItems,
     topics, topicsLoading, saveCustomTopic,
     pinnedTopicIds, toggleTopicPin, deleteTopic,
     roundOptions, defaultRounds, requestNavigation, settingsLoaded,
@@ -488,12 +489,16 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
   }
 
   // Confidence Pill — instant heal, spent from inventory. No AI call, no
-  // phase change, so it doesn't cost the player a beat mid-argument.
+  // phase change, so it doesn't cost the player a beat mid-argument. Heal
+  // amount comes from the admin-editable storeItems catalog (Admin → Store
+  // → Items), falling back to the hardcoded config if that item's missing.
   async function useConfidencePillItem() {
     if (phase !== "player-turn") return;
     const ok = await useConfidencePill();
     if (!ok) return;
-    setPHP(hp => clamp(hp + GAME_CONFIG.store.confidencePill.healAmount, 0, 100));
+    const item = storeItems.find((i) => i.key === "confidence_pill");
+    const healAmount = item?.healAmount ?? GAME_CONFIG.store.confidencePill.healAmount;
+    setPHP(hp => clamp(hp + healAmount, 0, 100));
   }
 
   // ── ADVANCE TO NEXT ROUND ──

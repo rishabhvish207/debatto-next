@@ -17,7 +17,8 @@
 import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { saveGameData, loadGameData, syncLocalToDB, loadPinnedTopics, togglePinnedTopic, deleteTopic as deleteTopicRecord, loadHiddenTopics } from "@/lib/persistenceManager";
-import { GAME_CONFIG } from "@/config/Game"; // now also provides GAME_CONFIG.store (insight lens / ace card / confidence pill pricing)
+import { GAME_CONFIG, DEFAULT_STORE_ITEMS, StoreItemDef } from "@/config/Game"; // now also provides GAME_CONFIG.store (insight lens / ace card / confidence pill pricing)
+import { DEFAULT_THEMES, StoreTheme } from "@/config/Themes";
 
 const supabase = createClient();
 const DEFAULT_NAME = GAME_CONFIG.defaultName;
@@ -31,6 +32,7 @@ type Profile = {
   prestige?: number;
   bio?: string | null;
   avatar_url?: string | null;
+  equipped_theme_id?: string | null; // null/absent = the default theme
 };
 
 type Inventory = {
@@ -65,6 +67,18 @@ type GameContextValue = {
   useAceCard: () => Promise<boolean>;
   useConfidencePill: () => Promise<boolean>;
   refetchInventory: () => Promise<void>;
+
+  storeItems: StoreItemDef[];
+  storeItemsLoading: boolean;
+  refetchStoreItems: () => Promise<void>;
+
+  themes: StoreTheme[];
+  themesLoading: boolean;
+  ownedThemeIds: string[];
+  equippedTheme: StoreTheme | null;
+  buyTheme: (themeId: string) => Promise<void>;
+  equipTheme: (themeId: string | null) => void;
+  refetchThemes: () => Promise<void>;
 
   topics: any[];
   topicsLoading: boolean;
@@ -163,6 +177,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         prestige: data.prestige,
         bio: data.bio ?? null,
         avatar_url: data.avatar_url ?? null,
+        equipped_theme_id: data.equipped_theme_id ?? null,
       });
     }
   };
@@ -386,17 +401,23 @@ export function GameProvider({ children }: { children: ReactNode }) {
     fetchInventory();
   }, [user]);
 
-  // Price of the *next* Ace Card purchase: baseCost * 2^held, so with the
-  // default baseCost of 2 this is exactly 2^(held+1) — 2, 4, 8, 16, 32…
-  // Tied to how many you currently hold, not how many you've ever bought:
-  // spend them all down to 0 and the price is right back to 2.
+  // Price of the *next* Ace Card purchase: baseCost * multiplier^held.
+  // Reads from the admin-editable storeItems catalog (Admin → Store →
+  // Items) so a price change there takes effect immediately; falls back to
+  // the hardcoded config if the item isn't in the catalog for some reason.
+  // Tied to how many you currently hold, not how many you've ever bought —
+  // spend them all down to 0 and the price is right back to base.
   function aceCardPrice(held: number = inventory.aceCards): number {
-    return GAME_CONFIG.store.aceCard.baseCost * Math.pow(2, held);
+    const item = storeItems.find((i) => i.key === "ace_card");
+    const base = item?.baseCost ?? GAME_CONFIG.store.aceCard.baseCost;
+    const mult = item?.priceMultiplier ?? 2;
+    return Math.round(base * Math.pow(mult, held));
   }
 
   async function buyInsightLens() {
     if (inventory.insightLens) return; // permanent — nothing to rebuy
-    const cost = GAME_CONFIG.store.insightLens.cost;
+    const item = storeItems.find((i) => i.key === "insight_lens");
+    const cost = item?.baseCost ?? GAME_CONFIG.store.insightLens.cost;
     if (profile.coins < cost) {
       setApiError("Not enough coins to buy the Insight Lens.");
       return;
@@ -417,7 +438,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }
 
   async function buyAceCard() {
-    const { maxStock } = GAME_CONFIG.store.aceCard;
+    const item = storeItems.find((i) => i.key === "ace_card");
+    const maxStock = item?.maxStock ?? GAME_CONFIG.store.aceCard.maxStock;
     if (inventory.aceCards >= maxStock) {
       setApiError("Ace Cards are already at max stock.");
       return;
@@ -444,7 +466,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }
 
   async function buyConfidencePill() {
-    const { cost, maxStock } = GAME_CONFIG.store.confidencePill;
+    const item = storeItems.find((i) => i.key === "confidence_pill");
+    const cost = item?.baseCost ?? GAME_CONFIG.store.confidencePill.cost;
+    const maxStock = item?.maxStock ?? GAME_CONFIG.store.confidencePill.maxStock;
     if (inventory.confidencePills >= maxStock) {
       setApiError("Confidence Pills are already at max stock.");
       return;
@@ -494,6 +518,143 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setApiError("Failed to sync item use.");
     }
     return true;
+  }
+
+  // ── STORE ITEMS: admin-editable catalog (public read, falls back to the
+  // hardcoded config if the store_items table isn't migrated yet) ──
+  const [storeItems, setStoreItems] = useState<StoreItemDef[]>(DEFAULT_STORE_ITEMS);
+  const [storeItemsLoading, setStoreItemsLoading] = useState(true);
+
+  const fetchStoreItems = async () => {
+    setStoreItemsLoading(true);
+    const { data, error } = await supabase
+      .from("store_items")
+      .select("*")
+      .order("sort_order", { ascending: true, nullsFirst: false });
+
+    if (error || !data || data.length === 0) {
+      setStoreItems(DEFAULT_STORE_ITEMS);
+      setStoreItemsLoading(false);
+      return;
+    }
+
+    setStoreItems(
+      data.map((row: any) => ({
+        key: row.key,
+        category: row.category,
+        name: row.name,
+        icon: row.icon || "🎁",
+        description: row.description || "",
+        pricingType: row.pricing_type,
+        baseCost: row.base_cost,
+        priceMultiplier: row.price_multiplier ?? 1,
+        maxStock: row.max_stock ?? null,
+        healAmount: row.heal_amount ?? 0,
+        active: row.active !== false,
+        sortOrder: row.sort_order ?? 0,
+      }))
+    );
+    setStoreItemsLoading(false);
+  };
+
+  useEffect(() => {
+    fetchStoreItems();
+  }, []);
+
+  // ── THEMES: admin-editable catalog + per-user ownership + equipped theme.
+  // The catalog itself (colors, fonts, price) is public and doesn't depend
+  // on the signed-in user; ownership does. ──
+  const [themes, setThemes] = useState<StoreTheme[]>(DEFAULT_THEMES);
+  const [themesLoading, setThemesLoading] = useState(true);
+  const [ownedThemeIds, setOwnedThemeIds] = useState<string[]>([]);
+
+  const fetchThemes = async () => {
+    setThemesLoading(true);
+    const { data, error } = await supabase
+      .from("store_themes")
+      .select("*")
+      .order("sort_order", { ascending: true, nullsFirst: false });
+
+    if (error || !data || data.length === 0) {
+      setThemes(DEFAULT_THEMES);
+      setThemesLoading(false);
+      return;
+    }
+
+    setThemes(
+      data.map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        description: row.description || "",
+        cost: row.cost ?? 0,
+        isDefault: !!row.is_default,
+        active: row.active !== false,
+        colors: row.colors,
+        fontHeading: row.font_heading || "'Playfair Display', serif",
+        fontBody: row.font_body || "'DM Sans', sans-serif",
+        googleFontUrl: row.google_font_url ?? null,
+        backgroundImageUrl: row.background_image_url ?? null,
+        backgroundOpacity: typeof row.background_opacity === "number" ? row.background_opacity : 0.16,
+      }))
+    );
+    setThemesLoading(false);
+  };
+
+  useEffect(() => {
+    fetchThemes();
+  }, []);
+
+  useEffect(() => {
+    const fetchOwned = async () => {
+      const res = await loadGameData("themes", user);
+      setOwnedThemeIds(res.ok && Array.isArray(res.data) ? res.data : []);
+    };
+    fetchOwned();
+  }, [user]);
+
+  // A theme with cost 0 (typically the default/starter look) is owned by
+  // everyone automatically, same as a free debot — no purchase needed.
+  const allOwnedThemeIds = [
+    ...themes.filter((t) => t.cost <= 0).map((t) => t.id),
+    ...ownedThemeIds,
+  ];
+  const equippedTheme =
+    themes.find((t) => t.id === profile.equipped_theme_id && t.active) ||
+    themes.find((t) => t.isDefault) ||
+    null;
+
+  async function buyTheme(themeId: string) {
+    const theme = themes.find((t) => t.id === themeId);
+    if (!theme) return;
+    if (allOwnedThemeIds.includes(themeId)) return; // already owned — nothing to buy
+    if (profile.coins < theme.cost) {
+      setApiError("Not enough coins to buy this theme.");
+      return;
+    }
+    try {
+      const res = await saveGameData("themes", { themeId }, user);
+      if (!res.ok) {
+        console.error(res.error);
+        setApiError("Failed to purchase theme. Please try again.");
+        return;
+      }
+      setOwnedThemeIds((prev) => (prev.includes(themeId) ? prev : [...prev, themeId]));
+      upProfile({ coins: profile.coins - theme.cost });
+    } catch (err) {
+      console.error(err);
+      setApiError("Failed to purchase theme. Please try again.");
+    }
+  }
+
+  // Equipping just flips profile.equipped_theme_id — upProfile already
+  // handles guest-local vs. Supabase persistence generically. Passing null
+  // resets to the catalog's default theme.
+  function equipTheme(themeId: string | null) {
+    if (themeId && !allOwnedThemeIds.includes(themeId)) {
+      setApiError("You don't own this theme yet.");
+      return;
+    }
+    upProfile({ equipped_theme_id: themeId });
   }
 
   // ── PINNED TOPICS ──
@@ -682,6 +843,16 @@ export function GameProvider({ children }: { children: ReactNode }) {
         useAceCard,
         useConfidencePill,
         refetchInventory: fetchInventory,
+        storeItems,
+        storeItemsLoading,
+        refetchStoreItems: fetchStoreItems,
+        themes,
+        themesLoading,
+        ownedThemeIds: allOwnedThemeIds,
+        equippedTheme,
+        buyTheme,
+        equipTheme,
+        refetchThemes: fetchThemes,
         topics,
         topicsLoading,
         saveCustomTopic,

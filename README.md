@@ -2,7 +2,9 @@
 
 An AI-powered debate game. Pick a debot (an AI opponent with its own personality, difficulty, and argument style), pick a side of a topic, and go head-to-head across a set number of rounds. Each round, an LLM judges your argument, scores it, and fires back in character — HP and points move accordingly until one side wins.
 
-Built with Next.js 15 (App Router), TypeScript, Tailwind, and Supabase (Postgres + Auth + Storage). AI calls run through Groq (Llama 3.3 70B).
+**Live demo:** [debatto-git-main-2-rishabhvish207s-projects.vercel.app](https://debatto-git-main-2-rishabhvish207s-projects.vercel.app/)
+
+Built with Next.js (App Router), TypeScript, Tailwind, and Supabase (Postgres + Auth + Storage). AI calls run through Groq (Llama 3.3 70B).
 
 ## Status
 
@@ -17,8 +19,8 @@ Built with Next.js 15 (App Router), TypeScript, Tailwind, and Supabase (Postgres
 
 ## Tech stack
 
-- **Next.js 15** (App Router) + **React 19** + **TypeScript**
-- **Tailwind CSS**
+- **Next.js 16** (App Router) + **React 19** + **TypeScript**
+- **Tailwind CSS 4**
 - **Supabase** — Postgres (with Row Level Security), Auth (Google OAuth), Storage
 - **Groq API** (`llama-3.3-70b-versatile`) for argument generation and judging
 

@@ -26,7 +26,7 @@ const LOCAL_KEYS: Record<Domain, string> = {
   debots: "debatto:unlocked_debots",   // string[] of debot ids the guest owns
   topics: "debatto:custom_topics",     // array of custom topic objects
   history: "debatto:match_history",    // array of { debotId, topicText, result, playerScore, opponentScore, rounds, usedItem }
-  inventory: "debatto:inventory",      // { insightLens, aceCards, confidencePills } — store items owned
+  inventory: "debatto:inventory",      // { insightLens, aceCards, confidencePills, revivalShots } — store items owned
   themes: "debatto:unlocked_themes",   // string[] of store_theme ids the guest owns
   achievements: "debatto:unlocked_achievements", // string[] of achievement ids the guest has unlocked
 };
@@ -79,7 +79,7 @@ type Result<T = unknown> =
   | { ok: false; source: "local" | "db"; error: any };
 
 type ProfileData = { coins?: number; [key: string]: any };
-type InventoryData = { insightLens: boolean; aceCards: number; confidencePills: number } | null;
+type InventoryData = { insightLens: boolean; aceCards: number; confidencePills: number; revivalShots: number } | null;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -113,7 +113,7 @@ export async function saveGameData(
     case "history":
       return writeMatch(user.id, value); // value: match record, see writeMatch()
     case "inventory":
-      return writeInventory(user.id, value); // value: partial { insightLens, aceCards, confidencePills }
+      return writeInventory(user.id, value); // value: partial { insightLens, aceCards, confidencePills, revivalShots }
   }
 }
 
@@ -378,6 +378,7 @@ async function writeInventory(userId: string, patch: Record<string, any>): Promi
   if ("insightLens" in patch) row.insight_lens = patch.insightLens;
   if ("aceCards" in patch) row.ace_cards = patch.aceCards;
   if ("confidencePills" in patch) row.confidence_pills = patch.confidencePills;
+  if ("revivalShots" in patch) row.revival_shots = patch.revivalShots;
 
   const { error } = await supabase.from("user_inventory").upsert(row, { onConflict: "user_id" });
   if (error) return { ok: false, source: "db", error };
@@ -399,6 +400,7 @@ async function readInventory(userId: string): Promise<Result<InventoryData>> {
       insightLens: !!data.insight_lens,
       aceCards: data.ace_cards ?? 0,
       confidencePills: data.confidence_pills ?? 0,
+      revivalShots: data.revival_shots ?? 0,
     },
   };
 }

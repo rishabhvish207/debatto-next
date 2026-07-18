@@ -17,10 +17,11 @@
 import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { saveGameData, loadGameData, syncLocalToDB, loadPinnedTopics, togglePinnedTopic, deleteTopic as deleteTopicRecord, loadHiddenTopics } from "@/lib/persistenceManager";
-import { GAME_CONFIG, DEFAULT_STORE_ITEMS, StoreItemDef } from "@/config/Game"; // now also provides GAME_CONFIG.store (insight lens / ace card / confidence pill pricing)
+import { GAME_CONFIG, DEFAULT_STORE_ITEMS, StoreItemDef, computeItemPrice } from "@/config/Game";
 import { DEFAULT_THEMES, StoreTheme } from "@/config/Themes";
 import { DEFAULT_ACHIEVEMENTS, AchievementDef } from "@/config/Achievements";
 import { getNewlyUnlocked, normalizeMatch } from "@/lib/achievements";
+import { DEFAULT_JUDGE_SETTINGS, JudgeSettings } from "@/config/Judge";
 
 const supabase = createClient();
 const DEFAULT_NAME = GAME_CONFIG.defaultName;
@@ -41,9 +42,10 @@ type Inventory = {
   insightLens: boolean;      // gear — one-time purchase, permanently unlocks the in-match Insight lifeline
   aceCards: number;          // consumable — "Show Answer", stacks up to store.aceCard.maxStock
   confidencePills: number;   // consumable — heals HP on use, stacks up to store.confidencePill.maxStock
+  revivalShots: number;      // consumable — heals to FULL HP on use, stacks up to store.revivalShot.maxStock
 };
 
-const DEFAULT_INVENTORY: Inventory = { insightLens: false, aceCards: 0, confidencePills: 0 };
+const DEFAULT_INVENTORY: Inventory = { insightLens: false, aceCards: 0, confidencePills: 0, revivalShots: 0 };
 
 type GameContextValue = {
   user: any;
@@ -63,11 +65,14 @@ type GameContextValue = {
   inventory: Inventory;
   inventoryLoading: boolean;
   aceCardPrice: (held?: number) => number;
+  itemPrice: (key: string, held: number) => number;
   buyInsightLens: () => Promise<void>;
   buyAceCard: () => Promise<void>;
   buyConfidencePill: () => Promise<void>;
+  buyRevivalShot: () => Promise<void>;
   useAceCard: () => Promise<boolean>;
   useConfidencePill: () => Promise<boolean>;
+  useRevivalShot: () => Promise<boolean>;
   refetchInventory: () => Promise<void>;
 
   storeItems: StoreItemDef[];
@@ -99,11 +104,13 @@ type GameContextValue = {
   defaultRounds: number;
   settingsLoaded: boolean;
   debotVertices: number | null;
-  debotShapeRotation: number;
   diffBadgeStyle: "badge" | "plain";
   cheatTapEnabled: boolean;
   siteBg: { url: string | null; opacity: number; applyEverywhere: boolean };
   refetchSettings: () => Promise<void>;
+  judgeSettings: JudgeSettings;
+  judgeSettingsLoading: boolean;
+  refetchJudgeSettings: () => Promise<void>;
   requestNavigation: (action: () => void) => void;
   pendingNavAction: boolean;
   confirmNavigation: () => void;
@@ -145,7 +152,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [pinnedTopicIds, setPinnedTopicIds] = useState<any[]>([]);
   const [hiddenTopicIds, setHiddenTopicIds] = useState<any[]>([]); // system topics this user has personally removed
   const [debotVertices, setDebotVertices] = useState<number | null>(null); // null = each debot uses its own
-  const [debotShapeRotation, setDebotShapeRotation] = useState<number>(0); // 0/90/180/270
   const [diffBadgeStyle, setDiffBadgeStyle] = useState<"badge" | "plain">("badge");
   const [cheatTapEnabled, setCheatTapEnabled] = useState<boolean>(true);
   const [siteBg, setSiteBg] = useState<{ url: string | null; opacity: number; applyEverywhere: boolean }>({ url: null, opacity: 0.16, applyEverywhere: false });
@@ -365,7 +371,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
       argSentences: d.arg_sentences ?? 3,
       sprite: d.sprite_url || null,
       spriteEmotions: d.sprite_emotions || {},
-      multiplier: d.multiplier ?? GAME_CONFIG.damage.playerMultiplier,
+      // Leave unset (not defaulted here) when a debot has no custom
+      // multiplier of its own — offline/page.tsx falls back to
+      // judgeSettings.opponentDamageMultiplier (Admin -> AI -> Judge &
+      // Scoring) in that case. This used to default to the *player's*
+      // multiplier instead, which meant every debot without an explicit
+      // override was silently using the wrong damage multiplier and the
+      // admin-configured opponent default could never actually apply.
+      multiplier: d.multiplier ?? undefined,
       reward: d.reward ?? 5,
       unlocked: (d.cost ?? 0) <= 0 || unlockedIds.includes(d.id),
     }));
@@ -413,17 +426,28 @@ export function GameProvider({ children }: { children: ReactNode }) {
     fetchInventory();
   }, [user]);
 
-  // Price of the *next* Ace Card purchase: baseCost * multiplier^held.
-  // Reads from the admin-editable storeItems catalog (Admin → Store →
-  // Items) so a price change there takes effect immediately; falls back to
-  // the hardcoded config if the item isn't in the catalog for some reason.
-  // Tied to how many you currently hold, not how many you've ever bought —
-  // spend them all down to 0 and the price is right back to base.
+  // Price of the *next* unit of any consumable, using whichever pricing
+  // formula an admin has set for it (Admin -> Store -> Items: flat,
+  // scaling/exponential, linear, or additive — see computeItemPrice).
+  // Reads from the admin-editable storeItems catalog so a change there
+  // takes effect immediately; falls back to a flat DB-catalog default (or
+  // GAME_CONFIG for ace_card specifically) if the item's missing.
+  function itemPrice(key: string, held: number): number {
+    const item = storeItems.find((i) => i.key === key);
+    if (!item) {
+      // ace_card is the only one with a non-trivial hardcoded fallback;
+      // everything else defaults to flat-priced-at-0 if the catalog is
+      // somehow completely unavailable.
+      if (key === "ace_card") return Math.round(GAME_CONFIG.store.aceCard.baseCost * Math.pow(2, held));
+      return 0;
+    }
+    return computeItemPrice(item, held);
+  }
+
+  // Kept as its own name for backward compatibility — Ace Card's price was
+  // shown in the Store before other items had scaling prices too.
   function aceCardPrice(held: number = inventory.aceCards): number {
-    const item = storeItems.find((i) => i.key === "ace_card");
-    const base = item?.baseCost ?? GAME_CONFIG.store.aceCard.baseCost;
-    const mult = item?.priceMultiplier ?? 2;
-    return Math.round(base * Math.pow(mult, held));
+    return itemPrice("ace_card", held);
   }
 
   async function buyInsightLens() {
@@ -457,7 +481,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       setApiError("Ace Cards are already at max stock.");
       return;
     }
-    const cost = aceCardPrice(inventory.aceCards);
+    const cost = itemPrice("ace_card", inventory.aceCards);
     if (profile.coins < cost) {
       setApiError("Not enough coins to buy an Ace Card.");
       return;
@@ -481,12 +505,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   async function buyConfidencePill() {
     const item = storeItems.find((i) => i.key === "confidence_pill");
-    const cost = item?.baseCost ?? GAME_CONFIG.store.confidencePill.cost;
     const maxStock = item?.maxStock ?? GAME_CONFIG.store.confidencePill.maxStock;
     if (inventory.confidencePills >= maxStock) {
       setApiError("Confidence Pills are already at max stock.");
       return;
     }
+    const cost = itemPrice("confidence_pill", inventory.confidencePills);
     if (profile.coins < cost) {
       setApiError("Not enough coins to buy a Confidence Pill.");
       return;
@@ -505,6 +529,35 @@ export function GameProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase Confidence Pill. Please try again.");
+    }
+  }
+
+  async function buyRevivalShot() {
+    const item = storeItems.find((i) => i.key === "revival_shot");
+    const maxStock = item?.maxStock ?? GAME_CONFIG.store.revivalShot.maxStock;
+    if (inventory.revivalShots >= maxStock) {
+      setApiError("Revival Shots are already at max stock.");
+      return;
+    }
+    const cost = itemPrice("revival_shot", inventory.revivalShots);
+    if (profile.coins < cost) {
+      setApiError("Not enough coins to buy a Revival Shot.");
+      return;
+    }
+    const nextShots = inventory.revivalShots + 1;
+    try {
+      const res = await saveGameData("inventory", { revivalShots: nextShots }, user);
+      if (!res.ok) {
+        console.error(res.error);
+        setApiError("Failed to purchase Revival Shot. Please try again.");
+        return;
+      }
+      setInventory((inv) => ({ ...inv, revivalShots: nextShots }));
+      upProfile({ coins: profile.coins - cost });
+      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { revivalShots: nextShots } }).catch(() => {});
+    } catch (err) {
+      console.error(err);
+      setApiError("Failed to purchase Revival Shot. Please try again.");
     }
   }
 
@@ -528,6 +581,18 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const next = inventory.confidencePills - 1;
     setInventory((inv) => ({ ...inv, confidencePills: next }));
     const res = await saveGameData("inventory", { confidencePills: next }, user);
+    if (!res.ok) {
+      console.error(res.error);
+      setApiError("Failed to sync item use.");
+    }
+    return true;
+  }
+
+  async function useRevivalShot(): Promise<boolean> {
+    if (inventory.revivalShots <= 0) return false;
+    const next = inventory.revivalShots - 1;
+    setInventory((inv) => ({ ...inv, revivalShots: next }));
+    const res = await saveGameData("inventory", { revivalShots: next }, user);
     if (!res.ok) {
       console.error(res.error);
       setApiError("Failed to sync item use.");
@@ -565,6 +630,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         priceMultiplier: row.price_multiplier ?? 1,
         maxStock: row.max_stock ?? null,
         healAmount: row.heal_amount ?? 0,
+        healFull: row.heal_full === true,
         active: row.active !== false,
         sortOrder: row.sort_order ?? 0,
       }))
@@ -817,7 +883,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debot_shape_rotation", "debot_diff_badge_style", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debot_diff_badge_style", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere"]);
 
     if (error || !data) {
       // DB fetch failed — fall back to config so the UI has *something*
@@ -833,7 +899,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
     setRoundOptions(Array.isArray(map.rounds_options) && map.rounds_options.length ? map.rounds_options : GAME_CONFIG.rounds.options);
     setDefaultRounds(typeof map.rounds_default === "number" ? map.rounds_default : GAME_CONFIG.rounds.default);
     setDebotVertices(typeof map.debot_vertices === "number" ? map.debot_vertices : null);
-    setDebotShapeRotation(typeof map.debot_shape_rotation === "number" ? map.debot_shape_rotation : 0);
     setDiffBadgeStyle(map.debot_diff_badge_style === "plain" ? "plain" : "badge");
     // Defaults to enabled (true) if the key was never set, so existing guests
     // keep the behavior they always had until an admin explicitly turns it off.
@@ -848,6 +913,60 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     fetchGameSettings();
+  }, []);
+
+  // ── JUDGE & SCORING: the prompt sent to the judge model, the caps applied
+  // to what it returns, HP-damage conversion, impact-label thresholds, and
+  // win bonuses — all admin-editable (Admin -> AI -> Judge & Scoring),
+  // separate from fetchGameSettings above since it's edited on its own tab
+  // and offline/page.tsx wants a single object to read from mid-match. ──
+  const [judgeSettings, setJudgeSettings] = useState<JudgeSettings>(DEFAULT_JUDGE_SETTINGS);
+  const [judgeSettingsLoading, setJudgeSettingsLoading] = useState(true);
+
+  const fetchJudgeSettings = async () => {
+    setJudgeSettingsLoading(true);
+    const { data, error } = await supabase
+      .from("app_settings")
+      .select("key, value")
+      .in("key", [
+        "judge_system_prompt", "judge_max_gain", "judge_max_penalty", "judge_max_opp_gain", "judge_max_opp_penalty",
+        "judge_player_dmg_multiplier", "judge_opp_dmg_multiplier",
+        "judge_impact_devastating", "judge_impact_strong", "judge_impact_solid", "judge_impact_weak",
+        "judge_no_penalty_bonus", "judge_domination_bonus", "judge_domination_margin",
+        "judge_low_effort_backstop_enabled",
+      ]);
+
+    if (error || !data || data.length === 0) {
+      setJudgeSettings(DEFAULT_JUDGE_SETTINGS);
+      setJudgeSettingsLoading(false);
+      return;
+    }
+
+    const map: Record<string, any> = {};
+    for (const row of data) map[row.key] = row.value;
+    const d = DEFAULT_JUDGE_SETTINGS;
+    setJudgeSettings({
+      systemPromptTemplate: typeof map.judge_system_prompt === "string" && map.judge_system_prompt.trim() ? map.judge_system_prompt : d.systemPromptTemplate,
+      maxGain: typeof map.judge_max_gain === "number" ? map.judge_max_gain : d.maxGain,
+      maxPenalty: typeof map.judge_max_penalty === "number" ? map.judge_max_penalty : d.maxPenalty,
+      maxOppGain: typeof map.judge_max_opp_gain === "number" ? map.judge_max_opp_gain : d.maxOppGain,
+      maxOppPenalty: typeof map.judge_max_opp_penalty === "number" ? map.judge_max_opp_penalty : d.maxOppPenalty,
+      playerDamageMultiplier: typeof map.judge_player_dmg_multiplier === "number" ? map.judge_player_dmg_multiplier : d.playerDamageMultiplier,
+      opponentDamageMultiplier: typeof map.judge_opp_dmg_multiplier === "number" ? map.judge_opp_dmg_multiplier : d.opponentDamageMultiplier,
+      impactDevastating: typeof map.judge_impact_devastating === "number" ? map.judge_impact_devastating : d.impactDevastating,
+      impactStrong: typeof map.judge_impact_strong === "number" ? map.judge_impact_strong : d.impactStrong,
+      impactSolid: typeof map.judge_impact_solid === "number" ? map.judge_impact_solid : d.impactSolid,
+      impactWeak: typeof map.judge_impact_weak === "number" ? map.judge_impact_weak : d.impactWeak,
+      noPenaltyBonus: typeof map.judge_no_penalty_bonus === "number" ? map.judge_no_penalty_bonus : d.noPenaltyBonus,
+      dominationBonus: typeof map.judge_domination_bonus === "number" ? map.judge_domination_bonus : d.dominationBonus,
+      dominationMargin: typeof map.judge_domination_margin === "number" ? map.judge_domination_margin : d.dominationMargin,
+      lowEffortBackstopEnabled: map.judge_low_effort_backstop_enabled !== false,
+    });
+    setJudgeSettingsLoading(false);
+  };
+
+  useEffect(() => {
+    fetchJudgeSettings();
   }, []);
 
   // ── TOPICS: system (public) + per-user/guest custom ──
@@ -949,11 +1068,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
         inventory,
         inventoryLoading,
         aceCardPrice,
+        itemPrice,
         buyInsightLens,
         buyAceCard,
         buyConfidencePill,
+        buyRevivalShot,
         useAceCard,
         useConfidencePill,
+        useRevivalShot,
         refetchInventory: fetchInventory,
         storeItems,
         storeItemsLoading,
@@ -980,11 +1102,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
         defaultRounds,
         settingsLoaded,
         debotVertices,
-        debotShapeRotation,
         diffBadgeStyle,
         cheatTapEnabled,
         siteBg,
         refetchSettings: fetchGameSettings,
+        judgeSettings,
+        judgeSettingsLoading,
+        refetchJudgeSettings: fetchJudgeSettings,
         requestNavigation,
         pendingNavAction: !!pendingNavAction,
         confirmNavigation,

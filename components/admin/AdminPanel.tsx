@@ -16,6 +16,7 @@ import { useGame } from "@/contexts/GameContext";
 import { callAI } from "@/lib/ai";
 import { DEFAULT_THEMES, FONT_PRESETS } from "@/config/Themes";
 import { CONDITION_TYPE_META, AchievementConditionType } from "@/config/Achievements";
+import { DEFAULT_JUDGE_SETTINGS } from "@/config/Judge";
 
 const supabase = createClient();
 
@@ -759,27 +760,37 @@ function StoreAdmin() {
   );
 }
 
-const BLANK_ITEM = {
-  id: null as any,
-  key: "",
-  category: "consumable" as "consumable" | "gear",
-  name: "",
-  icon: "🎁",
-  description: "",
-  pricing_type: "flat" as "flat" | "scaling",
-  base_cost: 0,
-  price_multiplier: 2,
-  max_stock: 5 as number | null,
-  heal_amount: 0,
-  active: true,
-};
+// Which fields make sense for which item — insight_lens is a one-time
+// permanent purchase (no stock cap, no pricing formula beyond flat, no
+// heal), the three consumables all support a pricing formula + max stock,
+// and only confidence_pill has an admin-tunable numeric heal amount
+// (revival_shot always heals to full, by design — not a number to tune).
+function itemFieldConfig(key: string) {
+  if (key === "insight_lens") return { pricing: false, maxStock: false, healAmount: false };
+  if (key === "confidence_pill") return { pricing: true, maxStock: true, healAmount: true };
+  // ace_card, revival_shot, and any legacy/unknown key: show everything so
+  // nothing is ever silently hidden from an old row.
+  return { pricing: true, maxStock: true, healAmount: key !== "ace_card" && key !== "revival_shot" };
+}
 
+function pricingFormulaHint(pricingType: string): string {
+  switch (pricingType) {
+    case "scaling": return "Next price = base × multiplier^held — doubles (or ×multiplier) with every one you hold.";
+    case "linear": return "Next price = multiplier × (held + 1) × base — grows by a flat multiple of the base price each purchase.";
+    case "additive": return "Next price = base + multiplier × held — grows by a flat amount each purchase.";
+    default: return "Same price every time, regardless of how many you hold.";
+  }
+}
+
+// Fixed catalog of four items — the in-match code only checks these four
+// keys, so this admin page only ever *tweaks* one of them, never adds a
+// fifth (which would just be inert) or deletes one of the four the game
+// actually relies on.
 function ItemsAdmin() {
   const { refetchStoreItems } = useGame();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<any>(null);
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState<any>(null);
   const [status, setStatus] = useState("");
 
   async function load() {
@@ -791,83 +802,50 @@ function ItemsAdmin() {
   }
   useEffect(() => { load(); }, []);
 
-  async function commitReorder(from: number, to: number) {
-    const newList = reorderArray(items, from, to);
-    setItems(newList);
-    await persistSortOrder("store_items", newList.map((i) => i.id));
-    refetchStoreItems();
-  }
-  const reorder = useDragReorder(commitReorder);
-
-  function startEdit(i: any) { setConfirmingDeleteId(null); setEditing({ ...i }); }
-  function startNew() { setConfirmingDeleteId(null); setEditing({ ...BLANK_ITEM }); }
+  function startEdit(i: any) { setEditing({ ...i }); }
   function cancelEdit() { setEditing(null); }
   function updateField(key: string, value: any) { setEditing((prev: any) => ({ ...prev, [key]: value })); }
 
   async function save() {
-    if (!editing?.key?.trim() || !editing?.name?.trim()) {
-      setStatus("Key and name are both required.");
+    if (!editing?.name?.trim()) {
+      setStatus("Name is required.");
       return;
     }
+    const fields = itemFieldConfig(editing.key);
     setStatus("Saving…");
-    const payload = {
-      key: editing.key.trim(),
-      category: editing.category,
+    const payload: Record<string, any> = {
       name: editing.name.trim(),
       icon: editing.icon?.trim() || "🎁",
       description: editing.description || "",
-      pricing_type: editing.pricing_type,
       base_cost: Number(editing.base_cost) || 0,
-      price_multiplier: editing.pricing_type === "scaling" ? (Number(editing.price_multiplier) || 2) : 1,
-      max_stock: editing.category === "consumable"
-        ? (editing.max_stock === "" || editing.max_stock == null ? null : Number(editing.max_stock))
-        : null,
-      heal_amount: Number(editing.heal_amount) || 0,
       active: !!editing.active,
     };
-    const res = editing.id
-      ? await supabase.from("store_items").update(payload).eq("id", editing.id).select()
-      : await supabase.from("store_items").insert({ ...payload, sort_order: items.length }).select().single();
+    if (fields.pricing) {
+      payload.pricing_type = editing.pricing_type;
+      payload.price_multiplier = editing.pricing_type === "flat" ? 1 : (Number(editing.price_multiplier) || 1);
+    }
+    if (fields.maxStock) {
+      payload.max_stock = editing.max_stock === "" || editing.max_stock == null ? null : Number(editing.max_stock);
+    }
+    if (fields.healAmount) {
+      payload.heal_amount = Number(editing.heal_amount) || 0;
+    }
 
+    const res = await supabase.from("store_items").update(payload).eq("id", editing.id).select();
     if (res.error) { setStatus(`Failed: ${res.error.message}`); return; }
-    setStatus(editing.id ? "Item updated." : "Item created.");
+    setStatus("Item updated.");
     setEditing(null);
     load();
     refetchStoreItems();
   }
 
-  async function confirmDelete(id: any) {
-    setStatus("Deleting…");
-    const { error } = await supabase.from("store_items").delete().eq("id", id);
-    setConfirmingDeleteId(null);
-    if (error) setStatus(`Failed to delete: ${error.message}`);
-    else { setStatus("Item deleted."); load(); refetchStoreItems(); }
-  }
-
   if (editing) {
+    const fields = itemFieldConfig(editing.key);
     return (
       <div>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
-          {editing.id ? `Edit: ${editing.name || "Item"}` : "New Item"}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 6 }}>
-          <LabeledInput
-            label="Key" value={editing.key} onChange={(v) => updateField("key", v)}
-            disabled={!!editing.id}
-          />
-          <div>
-            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Category</label>
-            <select className="input-field" value={editing.category} onChange={(e) => updateField("category", e.target.value)} style={{ width: "100%" }}>
-              <option value="consumable">Consumable</option>
-              <option value="gear">Gear</option>
-            </select>
-          </div>
-        </div>
-        <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
-          <code>insight_lens</code>, <code>ace_card</code>, and <code>confidence_pill</code> are the three keys the in-match code actually
-          checks — use one of these exactly to restore that item's original behavior, or delete/edit its name, icon, description, and
-          price freely without breaking anything. Any other key is shown in the Store but has no effect in a match until a developer
-          wires it up.
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>Edit: {editing.name || "Item"}</div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12 }}>
+          <code>{editing.key}</code> · {editing.category}
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
@@ -877,35 +855,48 @@ function ItemsAdmin() {
         <LabeledTextarea label="Description" value={editing.description} onChange={(v) => updateField("description", v)} />
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
-          <div>
-            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Pricing</label>
-            <select className="input-field" value={editing.pricing_type} onChange={(e) => updateField("pricing_type", e.target.value)} style={{ width: "100%" }}>
-              <option value="flat">Flat — same price every time</option>
-              <option value="scaling">Scaling — price grows with stock held</option>
-            </select>
-          </div>
-          <LabeledInput label="Base cost (❋)" value={editing.base_cost} onChange={(v) => updateField("base_cost", v)} type="number" />
-          {editing.pricing_type === "scaling" && (
-            <LabeledInput
-              label="Price multiplier (× per held)" value={editing.price_multiplier}
-              onChange={(v) => updateField("price_multiplier", v)} type="number" step="0.1"
-            />
+          {fields.pricing ? (
+            <>
+              <div>
+                <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Pricing formula</label>
+                <select className="input-field" value={editing.pricing_type} onChange={(e) => updateField("pricing_type", e.target.value)} style={{ width: "100%" }}>
+                  <option value="flat">Flat — same price every time</option>
+                  <option value="scaling">Exponential — base × multiplier^held</option>
+                  <option value="linear">Linear — multiplier × (held+1) × base</option>
+                  <option value="additive">Additive — base + multiplier × held</option>
+                </select>
+              </div>
+              <LabeledInput label="Base cost (❋)" value={editing.base_cost} onChange={(v) => updateField("base_cost", v)} type="number" />
+              {editing.pricing_type !== "flat" && (
+                <LabeledInput
+                  label="Multiplier" value={editing.price_multiplier}
+                  onChange={(v) => updateField("price_multiplier", v)} type="number" step="0.1"
+                />
+              )}
+            </>
+          ) : (
+            <LabeledInput label="Cost (❋)" value={editing.base_cost} onChange={(v) => updateField("base_cost", v)} type="number" />
           )}
-          {editing.category === "consumable" && (
+          {fields.maxStock && (
             <LabeledInput
               label="Max stock (blank = unlimited)" value={editing.max_stock ?? ""}
               onChange={(v) => updateField("max_stock", v)} type="number"
             />
           )}
-          {editing.category === "consumable" && (
+          {fields.healAmount && (
             <LabeledInput
-              label="Heal amount (HP, 0 = no heal effect)" value={editing.heal_amount ?? 0}
+              label="Heal amount (HP)" value={editing.heal_amount ?? 0}
               onChange={(v) => updateField("heal_amount", v)} type="number"
             />
           )}
         </div>
+        {fields.pricing && (
+          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6, lineHeight: 1.5 }}>
+            {pricingFormulaHint(editing.pricing_type)}
+          </div>
+        )}
 
-        <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12, fontSize: 12, color: "var(--text)" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, fontSize: 12, color: "var(--text)" }}>
           <input type="checkbox" checked={!!editing.active} onChange={(e) => updateField("active", e.target.checked)} />
           Active — visible in the Store
         </label>
@@ -921,35 +912,26 @@ function ItemsAdmin() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <span style={{ fontSize: 12, color: "var(--muted)" }}>{items.length} items</span>
-        <button className="btn btn-primary btn-sm" onClick={startNew}>+ New Item</button>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 10, lineHeight: 1.5 }}>
+        The four items below are the whole catalog the game actually checks in a match — this page only tweaks their
+        numbers (price, stock cap, heal amount), it can't add or remove items.
       </div>
       {loading ? (
         <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
-          {items.map((it, i) => (
-            <div key={it.id} ref={reorder.setRowRef(i)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", opacity: it.active === false ? 0.5 : 1, ...reorder.rowStyle(i) }}>
-              <span {...reorder.handleProps(i)}>⠿</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {items.map((it) => (
+            <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", opacity: it.active === false ? 0.5 : 1 }}>
               <span style={{ fontSize: 18 }}>{it.icon}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
                 <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                  <code>{it.key}</code> · {it.category} · ❋{it.base_cost}{it.pricing_type === "scaling" ? ` ×${it.price_multiplier}^held` : ""}
-                  {it.heal_amount ? ` · heals +${it.heal_amount} HP` : ""}
+                  <code>{it.key}</code> · {it.category} · ❋{it.base_cost}{it.pricing_type && it.pricing_type !== "flat" ? ` · ${it.pricing_type}` : ""}
+                  {it.heal_amount ? ` · heals +${it.heal_amount} HP` : it.key === "revival_shot" ? " · heals to full HP" : ""}
                   {it.active === false && " · inactive"}
                 </div>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={() => startEdit(it)}>Edit</button>
-              {confirmingDeleteId === it.id ? (
-                <>
-                  <button className="btn btn-danger btn-sm" onClick={() => confirmDelete(it.id)}>Confirm</button>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setConfirmingDeleteId(null)}>Cancel</button>
-                </>
-              ) : (
-                <button className="btn btn-ghost btn-sm" onClick={() => setConfirmingDeleteId(it.id)}>Delete</button>
-              )}
             </div>
           ))}
         </div>
@@ -1442,6 +1424,7 @@ function AchievementsCatalogAdmin() {
             >
               <option value="ace_card">Ace Card</option>
               <option value="confidence_pill">Confidence Pill</option>
+              <option value="revival_shot">Revival Shot</option>
             </select>
           </div>
         )}
@@ -1631,7 +1614,6 @@ function SettingsAdmin() {
   const [roundsOptionsText, setRoundsOptionsText] = useState("");
   const [roundsDefault, setRoundsDefault] = useState<number | "">("");
   const [vertices, setVertices] = useState<number | "">("");
-  const [shapeRotation, setShapeRotation] = useState(0);
   const [diffBadgeStyle, setDiffBadgeStyle] = useState<"badge" | "plain">("badge");
   const [cheatEnabled, setCheatEnabled] = useState(true);
   const [landingBgUrl, setLandingBgUrl] = useState<string | null>(null);
@@ -1648,7 +1630,7 @@ function SettingsAdmin() {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debot_shape_rotation", "debot_diff_badge_style", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere", "landing_subtext"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debot_diff_badge_style", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere", "landing_subtext"]);
 
     if (error) {
       setStatus(`Failed to load: ${error.message}. Have you run app_settings.sql / debots_redesign.sql yet?`);
@@ -1661,7 +1643,6 @@ function SettingsAdmin() {
     setRoundsOptionsText(Array.isArray(map.rounds_options) ? map.rounds_options.join(", ") : "");
     setRoundsDefault(typeof map.rounds_default === "number" ? map.rounds_default : "");
     setVertices(typeof map.debot_vertices === "number" ? map.debot_vertices : "");
-    setShapeRotation(typeof map.debot_shape_rotation === "number" ? map.debot_shape_rotation : 0);
     setDiffBadgeStyle(map.debot_diff_badge_style === "plain" ? "plain" : "badge");
     setCheatEnabled(map.debucks_cheat_enabled !== false);
     setLandingBgUrl(typeof map.landing_bg_url === "string" ? map.landing_bg_url : null);
@@ -1754,7 +1735,6 @@ function SettingsAdmin() {
       { key: "rounds_options", value: parsedOptions },
       { key: "rounds_default", value: Number(roundsDefault) || parsedOptions[0] },
       { key: "debucks_cheat_enabled", value: cheatEnabled },
-      { key: "debot_shape_rotation", value: shapeRotation },
       { key: "debot_diff_badge_style", value: diffBadgeStyle },
       { key: "bg_apply_everywhere", value: bgApplyEverywhere },
       { key: "landing_subtext", value: landingSubtext.trim() ? landingSubtext : DEFAULT_SUBTEXT },
@@ -1800,24 +1780,6 @@ function SettingsAdmin() {
         Applies one vertex count to every debot at once, overriding each debot's individual shape. Leave blank to let each debot keep its own shape.
       </div>
       <LabeledInput label="Vertices for all debots (0 = circle, 3–20 sides, blank = per-debot)" value={vertices} onChange={(v) => setVertices(v === "" ? "" : Number(v))} type="number" min={0} max={20} />
-
-      <div style={{ marginTop: 14 }}>
-        <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
-          Frame rotation (applies to every debot's shape)
-        </label>
-        <div style={{ display: "flex", gap: 6 }}>
-          {[0, 90, 180, 270].map((deg) => (
-            <button
-              key={deg}
-              type="button"
-              className={`btn btn-sm ${shapeRotation === deg ? "btn-primary" : "btn-ghost"}`}
-              onClick={() => setShapeRotation(deg)}
-            >
-              {deg}°
-            </button>
-          ))}
-        </div>
-      </div>
 
       <div style={{ marginTop: 14 }}>
         <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
@@ -1913,6 +1875,31 @@ function SettingsAdmin() {
 }
 
 function AiSettingsAdmin() {
+  const [sub, setSub] = useState<"model" | "judge">("model");
+  return (
+    <div>
+      <div style={{ display: "inline-flex", gap: 4, background: "var(--faint)", borderRadius: 999, padding: 3, marginBottom: 14 }}>
+        {(["model", "judge"] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setSub(s)}
+            style={{
+              border: "none", cursor: "pointer", borderRadius: 999,
+              padding: "5px 14px", fontSize: 12, fontWeight: 600,
+              background: sub === s ? "var(--surface2)" : "transparent",
+              color: sub === s ? "var(--text)" : "var(--muted)",
+            }}
+          >
+            {s === "model" ? "Model" : "Judge & Scoring"}
+          </button>
+        ))}
+      </div>
+      {sub === "model" ? <AiModelAdmin /> : <JudgeScoringAdmin />}
+    </div>
+  );
+}
+
+function AiModelAdmin() {
   const [model, setModel] = useState("");
   const [maxTokens, setMaxTokens] = useState<number | "">("");
   const [temperature, setTemperature] = useState<number | "">("");
@@ -1991,6 +1978,185 @@ function AiSettingsAdmin() {
       </label>
 
       <button className="btn btn-primary btn-sm" style={{ marginTop: 14 }} onClick={save}>Save settings</button>
+      {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+    </div>
+  );
+}
+
+// ===========================================================================
+// JUDGE & SCORING — complete admin control over how a round gets scored:
+// the actual prompt text sent to the judge model, the caps applied to what
+// it returns, the HP-damage conversion, impact-label thresholds, and win
+// bonuses. See config/Judge.ts for exactly how much of this is tunable vs
+// structurally fixed (the honest answer, spelled out in a comment there).
+// ===========================================================================
+
+function JudgeScoringAdmin() {
+  const { judgeSettings, judgeSettingsLoading, refetchJudgeSettings } = useGame();
+  const [promptText, setPromptText] = useState("");
+  const [maxGain, setMaxGain] = useState<number | "">("");
+  const [maxPenalty, setMaxPenalty] = useState<number | "">("");
+  const [maxOppGain, setMaxOppGain] = useState<number | "">("");
+  const [maxOppPenalty, setMaxOppPenalty] = useState<number | "">("");
+  const [playerDmgMult, setPlayerDmgMult] = useState<number | "">("");
+  const [oppDmgMult, setOppDmgMult] = useState<number | "">("");
+  const [impactDevastating, setImpactDevastating] = useState<number | "">("");
+  const [impactStrong, setImpactStrong] = useState<number | "">("");
+  const [impactSolid, setImpactSolid] = useState<number | "">("");
+  const [impactWeak, setImpactWeak] = useState<number | "">("");
+  const [noPenaltyBonus, setNoPenaltyBonus] = useState<number | "">("");
+  const [dominationBonus, setDominationBonus] = useState<number | "">("");
+  const [dominationMargin, setDominationMargin] = useState<number | "">("");
+  const [backstopEnabled, setBackstopEnabled] = useState(true);
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    if (judgeSettingsLoading) return;
+    setPromptText(judgeSettings.systemPromptTemplate);
+    setMaxGain(judgeSettings.maxGain);
+    setMaxPenalty(judgeSettings.maxPenalty);
+    setMaxOppGain(judgeSettings.maxOppGain);
+    setMaxOppPenalty(judgeSettings.maxOppPenalty);
+    setPlayerDmgMult(judgeSettings.playerDamageMultiplier);
+    setOppDmgMult(judgeSettings.opponentDamageMultiplier);
+    setImpactDevastating(judgeSettings.impactDevastating);
+    setImpactStrong(judgeSettings.impactStrong);
+    setImpactSolid(judgeSettings.impactSolid);
+    setImpactWeak(judgeSettings.impactWeak);
+    setNoPenaltyBonus(judgeSettings.noPenaltyBonus);
+    setDominationBonus(judgeSettings.dominationBonus);
+    setDominationMargin(judgeSettings.dominationMargin);
+    setBackstopEnabled(judgeSettings.lowEffortBackstopEnabled);
+  }, [judgeSettingsLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function save() {
+    if (!promptText.trim()) { setStatus("The prompt can't be empty."); return; }
+    setStatus("Saving…");
+    const rows = [
+      { key: "judge_system_prompt", value: promptText },
+      { key: "judge_max_gain", value: Number(maxGain) || 0 },
+      { key: "judge_max_penalty", value: Number(maxPenalty) || 0 },
+      { key: "judge_max_opp_gain", value: Number(maxOppGain) || 0 },
+      { key: "judge_max_opp_penalty", value: Number(maxOppPenalty) || 0 },
+      { key: "judge_player_dmg_multiplier", value: Number(playerDmgMult) || 0 },
+      { key: "judge_opp_dmg_multiplier", value: Number(oppDmgMult) || 0 },
+      { key: "judge_impact_devastating", value: Number(impactDevastating) || 0 },
+      { key: "judge_impact_strong", value: Number(impactStrong) || 0 },
+      { key: "judge_impact_solid", value: Number(impactSolid) || 0 },
+      { key: "judge_impact_weak", value: Number(impactWeak) || 0 },
+      { key: "judge_no_penalty_bonus", value: Number(noPenaltyBonus) || 0 },
+      { key: "judge_domination_bonus", value: Number(dominationBonus) || 0 },
+      { key: "judge_domination_margin", value: Number(dominationMargin) || 0 },
+      { key: "judge_low_effort_backstop_enabled", value: backstopEnabled },
+    ];
+    const { data, error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" }).select();
+    if (error) { setStatus(`Failed: ${error.message}`); return; }
+    if (!data || data.length < rows.length) {
+      setStatus("Some settings didn't save — check the 'app_settings' table's write policy allows this admin account.");
+      return;
+    }
+    setStatus("Saved — takes effect on the next round judged.");
+    refetchJudgeSettings();
+  }
+
+  function restoreDefault() {
+    setPromptText(DEFAULT_JUDGE_SETTINGS.systemPromptTemplate);
+    setStatus("Prompt reset to the shipped default — click Save to apply.");
+  }
+
+  if (judgeSettingsLoading) return <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>;
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14, lineHeight: 1.6 }}>
+        This is the actual prompt sent to the judge model every round, plus every number that turns its response into
+        a score. Rewrite the prompt freely — the <code>{"{token}"}</code> placeholders below get substituted with the
+        live match state; delete a placeholder if you don't want the model considering that, but don't rename one or
+        it'll be left in literally instead of filled in.
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <label style={{ fontSize: 11, color: "var(--muted)" }}>Judge system prompt</label>
+        <button className="btn btn-ghost btn-sm" onClick={restoreDefault}>Restore default</button>
+      </div>
+      <textarea
+        className="input-field"
+        value={promptText}
+        onChange={(e) => setPromptText(e.target.value)}
+        rows={16}
+        style={{ width: "100%", resize: "vertical", fontFamily: "monospace", fontSize: 11.5, lineHeight: 1.6 }}
+      />
+      <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6, lineHeight: 1.6 }}>
+        Available placeholders: <code>{"{opp_name} {topic} {opp_side} {player_name} {player_side} {round} {rounds} {opp_personality} {opp_depth} {opp_story} {difficulty_guidance} {emotional_context} {opp_arg} {player_arg} {closing_instruction} {max_gain} {max_penalty} {max_opp_gain} {max_opp_penalty}"}</code>
+        <br />
+        The model's JSON response is read for exactly five scoring fields — <code>gain</code>, <code>penalty</code>,{" "}
+        <code>opponent_gain</code>, <code>opponent_penalty</code>, <code>opponent_reply</code> — plus{" "}
+        <code>tags</code>/<code>critique</code>/<code>fallacies</code>/<code>weak_points</code>, which are shown to the
+        player but don't affect score. Renaming or adding fields in the prompt won't change what the app reads —
+        that mapping is fixed in code, only the caps and wording around it are editable here.
+      </div>
+
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 22, marginBottom: 8 }}>
+        Score Caps
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <LabeledInput label="Max player gain" value={maxGain} onChange={(v) => setMaxGain(v === "" ? "" : Number(v))} type="number" />
+        <LabeledInput label="Max player penalty" value={maxPenalty} onChange={(v) => setMaxPenalty(v === "" ? "" : Number(v))} type="number" />
+        <LabeledInput label="Max opponent gain" value={maxOppGain} onChange={(v) => setMaxOppGain(v === "" ? "" : Number(v))} type="number" />
+        <LabeledInput label="Max opponent penalty" value={maxOppPenalty} onChange={(v) => setMaxOppPenalty(v === "" ? "" : Number(v))} type="number" />
+      </div>
+
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 22, marginBottom: 8 }}>
+        HP Damage
+      </div>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
+        HP lost is always <code>net score × this multiplier</code>, floored — the formula's shape isn't editable, only the multiplier is.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <LabeledInput label="Player damage multiplier" value={playerDmgMult} onChange={(v) => setPlayerDmgMult(v === "" ? "" : Number(v))} type="number" step="0.01" />
+        <LabeledInput label="Opponent damage multiplier (default, per-debot override wins)" value={oppDmgMult} onChange={(v) => setOppDmgMult(v === "" ? "" : Number(v))} type="number" step="0.01" />
+      </div>
+
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 22, marginBottom: 8 }}>
+        Impact Label Thresholds
+      </div>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
+        Net score needed to earn each label, checked top-down — below "Weak" always shows Ineffective.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <LabeledInput label="Devastating ≥" value={impactDevastating} onChange={(v) => setImpactDevastating(v === "" ? "" : Number(v))} type="number" />
+        <LabeledInput label="Strong ≥" value={impactStrong} onChange={(v) => setImpactStrong(v === "" ? "" : Number(v))} type="number" />
+        <LabeledInput label="Solid ≥" value={impactSolid} onChange={(v) => setImpactSolid(v === "" ? "" : Number(v))} type="number" />
+        <LabeledInput label="Weak ≥" value={impactWeak} onChange={(v) => setImpactWeak(v === "" ? "" : Number(v))} type="number" />
+      </div>
+
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 22, marginBottom: 8 }}>
+        Win Bonuses (debucks, on top of the debot's base reward)
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <LabeledInput label="No-penalty bonus" value={noPenaltyBonus} onChange={(v) => setNoPenaltyBonus(v === "" ? "" : Number(v))} type="number" />
+        <div />
+        <LabeledInput label="Domination bonus" value={dominationBonus} onChange={(v) => setDominationBonus(v === "" ? "" : Number(v))} type="number" />
+        <LabeledInput label="Domination margin (net points)" value={dominationMargin} onChange={(v) => setDominationMargin(v === "" ? "" : Number(v))} type="number" />
+      </div>
+      <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6, lineHeight: 1.5 }}>
+        No-penalty pays out only if every round of the match scored 0 penalty. Domination pays out only if the final
+        point margin (player − opponent) is at least the margin above.
+      </div>
+
+      <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 22, marginBottom: 8 }}>
+        Low-Effort Backstop
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+        <input type="checkbox" checked={backstopEnabled} onChange={(e) => setBackstopEnabled(e.target.checked)} style={{ accentColor: "var(--blue)" }} />
+        Locally zero the score for obvious junk input (too short, mostly symbols, no real words)
+      </label>
+      <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}>
+        Turning this off trusts the model's own gain/penalty completely, with no local override — useful for testing
+        whether the prompt alone is strict enough on its own.
+      </div>
+
+      <button className="btn btn-primary btn-sm" style={{ marginTop: 16 }} onClick={save}>Save Judge & Scoring settings</button>
       {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
     </div>
   );

@@ -14,6 +14,7 @@ import { DialogueBox } from "@/components/game/DialogueBox";
 import { InputPanel } from "@/components/game/InputPanel";
 import { ItemsBar } from "@/components/game/ItemsBar";
 import { GAME_CONFIG } from "@/config/Game";
+import { fillTemplate } from "@/config/Judge";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 
 /* ═══════════════════════════════════════════════════════════
@@ -90,13 +91,14 @@ export default function OfflinePage() {
     profile, upProfile,
     battleActive, setBattleActive,
     opps, oppsLoading, unlockDebot,
-    inventory, useAceCard, useConfidencePill,
+    inventory, useAceCard, useConfidencePill, useRevivalShot,
     storeItems,
     checkAchievements,
     topics, topicsLoading, saveCustomTopic,
     pinnedTopicIds, toggleTopicPin, deleteTopic,
     roundOptions, defaultRounds, requestNavigation, settingsLoaded,
     apiError, setApiError,
+    judgeSettings,
   } = useGame();
 
   const [page, setPage] = useState<"setup" | "battle" | "result">("setup");
@@ -156,8 +158,12 @@ export default function OfflinePage() {
   // in this match — read at match-end for the "Clean Sweep" (win without
   // using an item) achievement condition. Reset whenever a new battle starts.
   const usedItemRef = useRef(false);
+  // Tracks whether every round so far has scored 0 penalty — feeds the
+  // "no penalty" win bonus, which only pays out if this stays true for the
+  // whole match (see judgeSettings.noPenaltyBonus, set from Admin -> AI).
+  const penaltyFreeRef = useRef(true);
   useEffect(() => {
-    if (page === "battle") usedItemRef.current = false;
+    if (page === "battle") { usedItemRef.current = false; penaltyFreeRef.current = true; }
   }, [page]);
 
   // Holds the exact record just written by the SAVE MATCH RESULT effect
@@ -329,53 +335,48 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
 
     const isLast = round >= rounds;
     const emotionalState = getEmotionalContext(oPts, pPts);
+    const closingInstruction = isLast ? "Closing statement (2 sentences)" : `Next in-character argument (${opp.argSentences ?? 3} sentences)`;
 
-    const sys = `You are both ${opp.name} and an impartial debate judge.
-TOPIC: "${activeTopic.text}" | OPPONENT SIDE: ${oppSide} | PLAYER (${profile.name}): ${curSide} | ROUND: ${round}/${rounds}
-DEBOT PERSONALITY: ${opp.personality} | ARGUMENT DEPTH: ${opp.depth}
-DEBOT BACKGROUND STORY: ${opp.story} (occasionally, not every round, let a hint of past/present/what-they're-working-toward color the opponent_reply)
-${getDifficultyGuidance(opp.diff)}
-EMOTIONAL CONTEXT: ${emotionalState}
-OPPONENT SAID: "${oppArg}"
-PLAYER SAID: "${input}"
-
-JUDGE RULES — grade like a strict debate judge, not a cheerleader, adjusted for this debot's difficulty above. Most arguments are mediocre; reserve high scores for arguments that earn them.
-- gain 0-50, anchored: 0-5 = off-topic, incoherent, or restates opponent with no new point. 6-15 = on-topic but shallow/unsupported assertion. 16-30 = a real point with some reasoning or evidence. 31-40 = a well-reasoned rebuttal that directly engages the opponent's specific claim. 41-50 = exceptional — direct refutation, evidence/logic, and precision, reserved for genuinely strong debate.
-- Before scoring, silently check: does this response engage with "${oppArg}" specifically, and does it make actual sense in English? If either check fails, gain must be 0-5 regardless of length or confident tone.
-- penalty 0-30: deduct for logical fallacies, irrelevance, contradictions, or restating without advancing the argument. Low-effort or nonsensical input should receive a HIGH penalty (20-30), not a low one.
-- impact from net: 35+→Devastating, 25-34→Strong, 14-24→Solid, 5-13→Weak, <5→Ineffective
-- tags: 2-3 short labels describing the PLAYER's argument specifically (e.g. "Logical Rebuttal", "Weak Evidence", "Ad Hominem") — must match what PLAYER SAID actually contains, never traits of OPPONENT SAID.
-- critique: one honest sentence about PLAYER SAID only. Do not describe or restate OPPONENT SAID's content, reasoning style, or weaknesses here — this field is about the player, not the opponent.
-- fallacies: fallacies in the PLAYER's response only.
-- CHECK BEFORE WRITING gain/penalty/tags/critique/fallacies: re-read PLAYER SAID above. Every one of these five fields must be grounded only in that exact text, never in OPPONENT SAID.
-- opponent_gain 0-40, opponent_penalty 0-15: evaluate opponent's prior argument (OPPONENT SAID) independently, by the same strict standard.
-- weak_points: 2-4 SHORT targetable phrases from YOUR new opponent_reply (the debot's upcoming argument, not the player's).
-
-Return ONLY valid JSON. Fill fields in this order so the player evaluation is grounded before you switch back into ${opp.name}'s voice:
-{
-  "gain": 0-50,
-  "penalty": 0-30,
-  "impact": "Ineffective|Weak|Solid|Strong|Devastating",
-  "tags": ["about PLAYER's argument only"],
-  "critique": "One honest sentence about PLAYER SAID only.",
-  "fallacies": [{"type":"name","text":"exact phrase from PLAYER SAID"}],
-  "opponent_gain": 0-40,
-  "opponent_penalty": 0-15,
-  "opponent_reply": "${isLast ? "Closing statement (2 sentences)" : `Next in-character argument (${opp.argSentences ?? 3} sentences)`}",
-  "weak_points": ["phrase1","phrase2"]
-}`;
+    // The prompt itself comes from Admin -> AI -> Judge & Scoring (falls
+    // back to config/Judge.ts's default if never edited) — everything
+    // below {token} is the live match state substituted into whatever
+    // template is currently configured.
+    const sys = fillTemplate(judgeSettings.systemPromptTemplate, {
+      opp_name: opp.name,
+      topic: activeTopic.text,
+      opp_side: oppSide,
+      player_name: profile.name,
+      player_side: curSide,
+      round, rounds,
+      opp_personality: opp.personality,
+      opp_depth: opp.depth,
+      opp_story: opp.story,
+      difficulty_guidance: getDifficultyGuidance(opp.diff),
+      emotional_context: emotionalState,
+      opp_arg: oppArg,
+      player_arg: input,
+      closing_instruction: closingInstruction,
+      max_gain: judgeSettings.maxGain,
+      max_penalty: judgeSettings.maxPenalty,
+      max_opp_gain: judgeSettings.maxOppGain,
+      max_opp_penalty: judgeSettings.maxOppPenalty,
+    });
 
     try {
       const raw = await callAI(sys, "Evaluate and respond.");
       const ev = JSON.parse(extractJSON(raw));
 
-      const lowEffort = isLowEffortInput(input);
-      const g = lowEffort ? 0 : clamp(ev.gain || 0, 0, GAME_CONFIG.scoring.maxGain);
-      const p = lowEffort ? GAME_CONFIG.scoring.maxPenalty : clamp(ev.penalty || 0, 0, GAME_CONFIG.scoring.maxPenalty);
+      // The low-effort backstop can be switched off entirely from Admin ->
+      // AI -> Judge & Scoring if an admin wants the model's own gain/
+      // penalty trusted completely, with no local override.
+      const lowEffort = judgeSettings.lowEffortBackstopEnabled && isLowEffortInput(input);
+      const g = lowEffort ? 0 : clamp(ev.gain || 0, 0, judgeSettings.maxGain);
+      const p = lowEffort ? judgeSettings.maxPenalty : clamp(ev.penalty || 0, 0, judgeSettings.maxPenalty);
       const net = Math.max(0, g - p);
+      if (p > 0) penaltyFreeRef.current = false;
 
-      const og = clamp(ev.opponent_gain || 0, 0, GAME_CONFIG.scoring.maxOppGain);
-      const op2 = clamp(ev.opponent_penalty || 0, 0, GAME_CONFIG.scoring.maxOppPenalty);
+      const og = clamp(ev.opponent_gain || 0, 0, judgeSettings.maxOppGain);
+      const op2 = clamp(ev.opponent_penalty || 0, 0, judgeSettings.maxOppPenalty);
       const oNet = Math.max(0, og - op2);
 
       // Player's damage to the opponent's HP uses the flat, game-wide
@@ -387,7 +388,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
       // size (as this used to do) made every hit look tiny regardless of
       // how good the argument actually was — a "Strong" 30-net hit was
       // displayed as "+15", which never matched its own label.
-      const calculatedNewOHP = Math.max(0, oHP - Math.floor(net * GAME_CONFIG.damage.playerMultiplier));
+      const calculatedNewOHP = Math.max(0, oHP - Math.floor(net * judgeSettings.playerDamageMultiplier));
       const playerDmgDealt = oHP - calculatedNewOHP;
       setOHP(calculatedNewOHP);
       setPPts(x => x + net);
@@ -400,7 +401,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
 
       // Save opponent's upcoming counter-damage for Phase 2 — same split as
       // above: oNet is the score, dmgDealt is only how much HP it costs.
-      const oppDmgMultiplier = opp.multiplier ?? GAME_CONFIG.damage.opponentMultiplier;
+      const oppDmgMultiplier = opp.multiplier ?? judgeSettings.opponentDamageMultiplier;
       const newPHP = Math.max(0, pHP - Math.floor(oNet * oppDmgMultiplier));
       const oppDmgDealt = pHP - newPHP;
       setPendingOppDamage({ oNet, newPHP, dmgDealt: oppDmgDealt });
@@ -410,14 +411,14 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
       // entirely via the low-effort backstop) — trusting the AI's label
       // after that meant the badge could say "Solid"/"Strong" even when
       // the actual, final net was 0. Recompute it here from the same
-      // thresholds given in the prompt so the label always matches the
-      // number actually shown.
+      // admin-configured thresholds used in the prompt so the label always
+      // matches the number actually shown.
       const impact =
         lowEffort ? "Ineffective" :
-        net >= 35 ? "Devastating" :
-        net >= 25 ? "Strong" :
-        net >= 14 ? "Solid" :
-        net >= 5 ? "Weak" : "Ineffective";
+        net >= judgeSettings.impactDevastating ? "Devastating" :
+        net >= judgeSettings.impactStrong ? "Strong" :
+        net >= judgeSettings.impactSolid ? "Solid" :
+        net >= judgeSettings.impactWeak ? "Weak" : "Ineffective";
 
       const full = {
         ...ev,
@@ -523,6 +524,16 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
     const item = storeItems.find((i) => i.key === "confidence_pill");
     const healAmount = item?.healAmount ?? GAME_CONFIG.store.confidencePill.healAmount;
     setPHP(hp => clamp(hp + healAmount, 0, 100));
+  }
+
+  // Revival Shot — instant heal to *full* HP, not a fixed amount. Same
+  // no-phase-change, no-AI-call pattern as the Confidence Pill.
+  async function useRevivalShotItem() {
+    if (phase !== "player-turn") return;
+    const ok = await useRevivalShot();
+    if (!ok) return;
+    usedItemRef.current = true;
+    setPHP(100);
   }
 
   // ── ADVANCE TO NEXT ROUND ──
@@ -933,7 +944,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
           </div>
         )}
 
-        {/* Items — Insight (unlimited while owned), Ace Cards / Confidence Pills bought in the Store */}
+        {/* Items — Insight (unlimited while owned), Ace Cards / Confidence Pills / Revival Shots bought in the Store */}
         {phase === "player-turn" && (
           <ItemsBar
             hasInsightLens={inventory.insightLens}
@@ -941,8 +952,10 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
             onUseInsight={getInsight}
             aceCards={inventory.aceCards}
             confidencePills={inventory.confidencePills}
+            revivalShots={inventory.revivalShots}
             onUseAce={getAns}
             onUseConfidence={useConfidencePillItem}
+            onUseRevival={useRevivalShotItem}
           />
         )}
 
@@ -972,7 +985,14 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
     // so a 2-round match and a 30-round match shouldn't pay the same flat
     // amount — scale it by how many rounds were actually played.
     const roundsFactor = rounds / (defaultRounds || 10);
-    const totalReward = won ? Math.max(1, Math.round(opp.reward * roundsFactor)) + GAME_CONFIG.bonus.noPenalty : 0;
+    const baseReward = Math.max(1, Math.round(opp.reward * roundsFactor));
+    // Bonuses are genuinely conditional now — noPenaltyBonus only pays out
+    // if every round of the match scored 0 penalty (tracked live in
+    // penaltyFreeRef as each round is judged), and dominationBonus only
+    // pays out if the final margin clears the admin-configured threshold.
+    const earnedNoPenaltyBonus = won && penaltyFreeRef.current ? judgeSettings.noPenaltyBonus : 0;
+    const earnedDominationBonus = won && (pPts - oPts) >= judgeSettings.dominationMargin ? judgeSettings.dominationBonus : 0;
+    const totalReward = won ? baseReward + earnedNoPenaltyBonus + earnedDominationBonus : 0;
 
     return (
       <div className="root" style={{ minHeight: "100vh", padding: "24px 16px", maxWidth: 720, margin: "0 auto" }}>
@@ -980,7 +1000,18 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
           <div className="anim-pop heading" style={{ fontSize: 52, color: won ? "var(--blue)" : draw ? "var(--muted)" : "var(--red)", marginBottom: 6 }}>{label}</div>
           <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 4 }}>vs {opp?.name} · "{activeTopic?.text}"</div>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{pPts} <span style={{ color: "var(--muted)", fontWeight: 400 }}>–</span> {oPts}</div>
-          {won && <div style={{ fontSize: 15, color: "var(--amber)", fontWeight: "bold", marginTop: 6 }}>+{totalReward} <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />earned</div>}
+          {won && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ fontSize: 15, color: "var(--amber)", fontWeight: "bold" }}>+{totalReward} <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />earned</div>
+              {(earnedNoPenaltyBonus > 0 || earnedDominationBonus > 0) && (
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                  {baseReward} base
+                  {earnedNoPenaltyBonus > 0 ? ` + ${earnedNoPenaltyBonus} clean-round bonus` : ""}
+                  {earnedDominationBonus > 0 ? ` + ${earnedDominationBonus} domination bonus` : ""}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{ fontSize: 12, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>

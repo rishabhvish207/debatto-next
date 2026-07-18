@@ -5,12 +5,12 @@
 // falls back to config/Game.ts + config/Themes.ts if the store_items /
 // store_themes tables haven't been migrated yet).
 //
-// Items purchase/use logic (coins, stock caps, Ace Card's scaling price)
+// Items purchase/use logic (coins, stock caps, per-item pricing formulas)
 // still lives in GameContext's inventory functions, keyed by each item's
-// `key` — only the three keys the in-match code actually checks
-// (insight_lens, ace_card, confidence_pill) do anything when bought. Any
-// other key an admin adds shows up in the list but is presentation-only
-// until a developer wires up what it does.
+// `key` — only the four keys the in-match code actually checks
+// (insight_lens, ace_card, confidence_pill, revival_shot) do anything when
+// bought. The item catalog itself is fixed to these four (Admin → Store →
+// Items only tweaks their numbers now, no add/delete) so that's the whole set.
 //
 // Themes change the app's whole look — colors, fonts, and (if set) a
 // background image — the moment they're equipped. See GameContext's
@@ -34,7 +34,7 @@ type Section = "items" | "themes";
 export default function StorePage() {
   const {
     profile, upProfile, inventory, inventoryLoading,
-    aceCardPrice, buyInsightLens, buyAceCard, buyConfidencePill,
+    aceCardPrice, itemPrice, buyInsightLens, buyAceCard, buyConfidencePill, buyRevivalShot,
     cheatTapEnabled,
     storeItems, storeItemsLoading,
     themes, themesLoading, ownedThemeIds, equippedTheme, buyTheme, equipTheme,
@@ -76,7 +76,7 @@ export default function StorePage() {
       );
     }
     if (item.key === "ace_card") {
-      const nextPrice = aceCardPrice(inventory.aceCards);
+      const nextPrice = itemPrice("ace_card", inventory.aceCards);
       const atMax = item.maxStock != null && inventory.aceCards >= item.maxStock;
       return (
         <div key={item.key}>
@@ -86,21 +86,50 @@ export default function StorePage() {
             <BuyButton cost={nextPrice} coins={profile.coins} disabled={atMax} disabledLabel={atMax ? "Stock full" : undefined}
               onBuy={buyAceCard} label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{nextPrice}</>} />
           </ItemCard>
-          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, paddingLeft: 2 }}>
-            Price depends on how many you're holding right now — using cards brings it back down, buying pushes it up.
-          </div>
+          {item.pricingType !== "flat" && (
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, paddingLeft: 2 }}>
+              Price depends on how many you're holding right now — using cards brings it back down, buying pushes it up.
+            </div>
+          )}
         </div>
       );
     }
     if (item.key === "confidence_pill") {
+      const nextPrice = itemPrice("confidence_pill", inventory.confidencePills);
       const atMax = item.maxStock != null && inventory.confidencePills >= item.maxStock;
       return (
-        <ItemCard key={item.key} icon={item.icon} name={item.name} categoryLabel={ITEM_CATEGORIES.consumable.label} description={item.description}
-          footer={<span style={{ fontSize: 12, color: "var(--muted)" }}>Held: <b style={{ color: "var(--text)" }}>{inventory.confidencePills}</b>{item.maxStock != null ? ` / ${item.maxStock}` : ""}</span>}
-        >
-          <BuyButton cost={item.baseCost} coins={profile.coins} disabled={atMax} disabledLabel={atMax ? "Stock full" : undefined}
-            onBuy={buyConfidencePill} label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{item.baseCost}</>} />
-        </ItemCard>
+        <div key={item.key}>
+          <ItemCard icon={item.icon} name={item.name} categoryLabel={ITEM_CATEGORIES.consumable.label} description={item.description}
+            footer={<span style={{ fontSize: 12, color: "var(--muted)" }}>Held: <b style={{ color: "var(--text)" }}>{inventory.confidencePills}</b>{item.maxStock != null ? ` / ${item.maxStock}` : ""}</span>}
+          >
+            <BuyButton cost={nextPrice} coins={profile.coins} disabled={atMax} disabledLabel={atMax ? "Stock full" : undefined}
+              onBuy={buyConfidencePill} label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{nextPrice}</>} />
+          </ItemCard>
+          {item.pricingType !== "flat" && (
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, paddingLeft: 2 }}>
+              Price depends on how many you're holding right now.
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (item.key === "revival_shot") {
+      const nextPrice = itemPrice("revival_shot", inventory.revivalShots);
+      const atMax = item.maxStock != null && inventory.revivalShots >= item.maxStock;
+      return (
+        <div key={item.key}>
+          <ItemCard icon={item.icon} name={item.name} categoryLabel={ITEM_CATEGORIES.consumable.label} description={item.description}
+            footer={<span style={{ fontSize: 12, color: "var(--muted)" }}>Held: <b style={{ color: "var(--text)" }}>{inventory.revivalShots}</b>{item.maxStock != null ? ` / ${item.maxStock}` : ""}</span>}
+          >
+            <BuyButton cost={nextPrice} coins={profile.coins} disabled={atMax} disabledLabel={atMax ? "Stock full" : undefined}
+              onBuy={buyRevivalShot} label={<>Buy · <DebucksIcon style={{ marginLeft: 2, marginRight: 2 }} />{nextPrice}</>} />
+          </ItemCard>
+          {item.pricingType !== "flat" && (
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, paddingLeft: 2 }}>
+              Price depends on how many you're holding right now.
+            </div>
+          )}
+        </div>
       );
     }
     // Any other admin-added key: shown, but there's no in-match effect wired

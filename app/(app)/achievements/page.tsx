@@ -34,7 +34,11 @@ export default function AchievementsPage() {
       case "debot_defeat": return cfg.debotId != null ? `Defeat ${debotName(cfg.debotId) || "this debot"}` : "Defeat a specific debot";
       case "no_item_win": return cfg.debotId != null ? `Beat ${debotName(cfg.debotId) || "this debot"} without using an item` : "Win a match without using any item";
       case "win_streak": return `Win ${cfg.count || 2} matches in a row`;
-      case "item_maxed": return cfg.itemKey === "confidence_pill" ? "Hold Confidence Pills at max stock" : "Hold Ace Cards at max stock";
+      case "item_maxed": {
+        if (cfg.itemKey === "confidence_pill") return "Hold Confidence Pills at max stock";
+        if (cfg.itemKey === "revival_shot") return "Hold Revival Shots at max stock";
+        return "Hold Ace Cards at max stock";
+      }
       case "insight_lens_owned": return "Unlock the Insight Lens";
       case "manual": return "Granted by an admin";
       default: return "";

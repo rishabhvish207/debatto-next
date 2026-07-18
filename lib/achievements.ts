@@ -31,7 +31,7 @@ export function normalizeMatch(raw: any): MatchRecord {
 
 export type AchievementEvalContext = {
   matchHistory: MatchRecord[]; // chronological ascending order
-  inventory: { insightLens: boolean; aceCards: number; confidencePills: number };
+  inventory: { insightLens: boolean; aceCards: number; confidencePills: number; revivalShots: number };
   storeItems: { key: string; maxStock: number | null }[];
 };
 
@@ -70,6 +70,10 @@ function conditionMet(a: AchievementDef, ctx: AchievementEvalContext): boolean {
       if (cfg.itemKey === "confidence_pill") {
         const max = ctx.storeItems.find((i) => i.key === "confidence_pill")?.maxStock ?? null;
         return max != null && ctx.inventory.confidencePills >= max;
+      }
+      if (cfg.itemKey === "revival_shot") {
+        const max = ctx.storeItems.find((i) => i.key === "revival_shot")?.maxStock ?? null;
+        return max != null && ctx.inventory.revivalShots >= max;
       }
       return false;
     }

@@ -60,14 +60,14 @@ The app expects specific tables, columns, and **Row Level Security policies** in
 - `debots` — the AI opponent catalog: `name`, `sub`, `personality`, `depth`, `story`, `arg_sentences`, `sprite_url`, `sprite_emotions` (jsonb), `multiplier` (its own attack-damage multiplier against the player), `cost`, `max_hp`, `color`, `diff` (difficulty label — read by the AI to scale how hard/easy it argues and how strictly it grades you), `dc`, `reward`, `vertices` (per-debot shape fallback; overridden globally if `app_settings.debot_vertices` is set)
 - `user_debots` — join table for per-user unlocks: `user_id`, `debot_id`, `unlocked_at`. Unlocks live here rather than as a column on `debots` itself, since a debot getting unlocked for one user must not unlock it globally for everyone.
 - `user_inventory` — one row per user for Store items: `user_id` (unique), `insight_lens` (bool, permanent), `ace_cards` (int, stackable), `confidence_pills` (int, stackable). Upserted on every purchase/use.
-- `store_items` — the admin-editable item catalog (Admin → Store → Items): `key` (see note below), `category` (`gear`/`consumable`), `name`, `icon`, `description`, `pricing_type` (`flat`/`scaling`), `base_cost`, `price_multiplier`, `max_stock`, `heal_amount` (HP restored on use — only meaningful for `confidence_pill`), `active`, `sort_order`. Falls back to a hardcoded catalog in `config/Game.ts` if this table is empty/missing, so the Store always has something to show.
+- `store_items` — the admin-editable item catalog (Admin → Store → Items): `key` (fixed to `insight_lens`/`ace_card`/`confidence_pill`/`revival_shot` — the only ones with in-match effects; no add/delete, only tweak), `category` (`gear`/`consumable`), `name`, `icon`, `description`, `pricing_type` (`flat`/`scaling`/`linear`/`additive`), `base_cost`, `price_multiplier`, `max_stock`, `heal_amount` (HP restored on use — only meaningful for `confidence_pill`), `heal_full` (heal to max HP instead — only meaningful for `revival_shot`), `active`, `sort_order`. Falls back to a hardcoded catalog in `config/Game.ts` if this table is empty/missing, so the Store always has something to show.
 - `store_themes` — the admin-editable theme catalog (Admin → Store → Themes): `name`, `description`, `cost`, `is_default`, `active`, `colors` (jsonb — all 18 CSS custom properties from `Debatto.css`), `font_heading`, `font_body`, `google_font_url`, `background_image_url`, `background_opacity`, `sort_order`. Falls back to `config/Themes.ts` if empty/missing.
 - `user_themes` — join table for per-user theme ownership: `user_id`, `theme_id`, `unlocked_at`. Same reasoning as `user_debots` — a theme bought by one user shouldn't unlock it for everyone.
 - `profiles.equipped_theme_id` — nullable, references `store_themes.id`; `null` means "use whichever theme has `is_default = true`".
 - `topics` — debate topics: `title`/`text`, `category`/`cat`, `is_system` (seeded topics vs. user-submitted), `user_id`
 - `pinned_topics` — per-user topic pins: `user_id`, `topic_id`
 - `hidden_topics` — per-user topic removals (used when a user "deletes" a system topic — it's hidden for them, not removed globally): `user_id`, `topic_id`
-- `app_settings` — key/value config the admin panel edits at runtime: `rounds_options`, `rounds_default`, `debot_vertices` (0–20 sides, blank = per-debot), `debot_shape_rotation` (0/90/180/270, rotates every debot's frame), `debot_diff_badge_style` (`badge`/`plain` — whether the difficulty label in the selection grid gets a background pill or plain text), `debucks_cheat_enabled`, `ai_model`, `ai_max_tokens`, `ai_temperature`, `ai_fallback_model`, `ai_fallback_enabled` (see "AI rate-limit fallback" below), `landing_bg_url` (public URL of the landing page's background image, shown at low opacity behind the logo; empty/absent means no background image)
+- `app_settings` — key/value config the admin panel edits at runtime: `rounds_options`, `rounds_default`, `debot_vertices` (0–20 sides, blank = per-debot), `debot_diff_badge_style` (`badge`/`plain` — whether the difficulty label in the selection grid gets a background pill or plain text), `debucks_cheat_enabled`, `ai_model`, `ai_max_tokens`, `ai_temperature`, `ai_fallback_model`, `ai_fallback_enabled` (see "AI rate-limit fallback" below), `landing_bg_url` (public URL of the landing page's background image, shown at low opacity behind the logo; empty/absent means no background image), and the full Judge & Scoring set (`judge_system_prompt`, `judge_max_gain`, `judge_max_penalty`, `judge_max_opp_gain`, `judge_max_opp_penalty`, `judge_player_dmg_multiplier`, `judge_opp_dmg_multiplier`, `judge_impact_devastating`/`_strong`/`_solid`/`_weak`, `judge_no_penalty_bonus`, `judge_domination_bonus`, `judge_domination_margin`, `judge_low_effort_backstop_enabled` — see `config/Judge.ts`)
 
 ### Required RLS policies
 
@@ -258,7 +258,58 @@ values
    '''Merriweather'', serif', '''Inter'', sans-serif', 'https://fonts.googleapis.com/css2?family=Merriweather:wght@700;900&family=Inter:wght@400;500;600&display=swap', 2);
 ```
 
-### Storage buckets
+### Items, pricing formulas, Revival Shot & Judge/Scoring migration
+
+Run this once. It: widens `pricing_type` to allow two new formulas, adds the Revival Shot item + its `heal_full`
+column, adds `revival_shots` to inventory, and seeds every Judge & Scoring setting (Admin → AI → Judge & Scoring)
+with the values that shipped as the default — the app falls back to these same values in code if a row's ever
+missing, so re-running this is always safe.
+
+```sql
+-- Store items: two new pricing formulas + heal-to-full support
+alter table public.store_items drop constraint if exists store_items_pricing_type_check;
+alter table public.store_items add constraint store_items_pricing_type_check
+  check (pricing_type in ('flat', 'scaling', 'linear', 'additive'));
+alter table public.store_items add column if not exists heal_full boolean not null default false;
+
+-- Revival Shot: instant heal-to-full consumable
+insert into public.store_items (key, category, name, icon, description, pricing_type, base_cost, price_multiplier, max_stock, heal_amount, heal_full, sort_order)
+values
+  ('revival_shot', 'consumable', 'Revival Shot', '⚡', 'A concentrated energy shot that instantly restores HP to its maximum. Best saved for when the debate is on the line.', 'flat', 40, 1, 1, 0, true, 3)
+on conflict (key) do nothing;
+
+-- Inventory: a stack count for Revival Shots, same pattern as ace_cards/confidence_pills
+alter table public.user_inventory add column if not exists revival_shots integer not null default 0;
+
+-- Judge & Scoring: seed every setting Admin -> AI -> Judge & Scoring edits.
+-- judge_system_prompt is long, so it's seeded from the app's own default
+-- (config/Judge.ts) via a plain string — copy that file's
+-- DEFAULT_JUDGE_PROMPT constant here if you want the DB to start with the
+-- exact wording rather than relying on the code fallback; either way the
+-- app behaves identically until an admin actually edits it.
+insert into public.app_settings (key, value)
+values
+  ('judge_max_gain', '50'),
+  ('judge_max_penalty', '30'),
+  ('judge_max_opp_gain', '40'),
+  ('judge_max_opp_penalty', '15'),
+  ('judge_player_dmg_multiplier', '0.52'),
+  ('judge_opp_dmg_multiplier', '0.38'),
+  ('judge_impact_devastating', '35'),
+  ('judge_impact_strong', '25'),
+  ('judge_impact_solid', '14'),
+  ('judge_impact_weak', '5'),
+  ('judge_no_penalty_bonus', '5'),
+  ('judge_domination_bonus', '8'),
+  ('judge_domination_margin', '20'),
+  ('judge_low_effort_backstop_enabled', 'true')
+on conflict (key) do nothing;
+
+-- Cleanup: the frame-rotation admin setting was removed this round (it
+-- distorted sprites more than it fixed shape orientation) — this key is no
+-- longer read anywhere, safe to drop.
+delete from public.app_settings where key = 'debot_shape_rotation';
+```
 
 Two public buckets, each with admin/user-scoped write access:
 
@@ -332,10 +383,10 @@ create unique index if not exists profiles_player_id_key on public.profiles (pla
 - **`contexts/GameContext.tsx`** is the single source of truth for profile, debots, topics, and admin-configurable game settings. It also owns the guest/logged-in duality: guests get local persistence (`localStorage`, via `lib/persistenceManager.ts`); logged-in users get the equivalent Supabase-backed calls. Most read paths merge both.
 - **Guarded navigation**: `GameContext` exposes `requestNavigation()`, which defers any navigation action behind a confirm modal (rendered in `app/(app)/layout.tsx`) whenever `battleActive` is true. The header logo, drawer links, and the in-match Exit button all route through it. Note: the actual browser back button (hardware/gesture) **cannot** be reliably intercepted this way in a Next.js SPA — a `popstate` fires only after the URL has already changed, and any dummy-history-entry workaround fights with Next's own router. Tab close/refresh is instead covered by a native `beforeunload` prompt.
 - **Debot difficulty (`diff`)** isn't just a label — `getDifficultyGuidance()` in `app/(app)/offline/page.tsx` turns it into concrete instructions injected into both the opening-argument and per-round judge prompts, so a "Beginner" debot genuinely argues weaker and gets graded more generously against, while "Expert" is the reverse.
-- **Damage multiplier (`debots.multiplier`)** scales *that debot's* attack against the player. The player's damage to the opponent uses a flat, game-wide constant (`GAME_CONFIG.damage.playerMultiplier`) instead, since that shouldn't vary per-debot.
-- **Judge scoring** has a client-side backstop (`isLowEffortInput()`) independent of the AI's own judgment — low-effort/gibberish input gets zero gain and max penalty locally regardless of what the model returns, since LLMs tend to grade generously by default.
-- **Match reward** scales with rounds played: `opp.reward` is calibrated for `app_settings.rounds_default`, and the actual payout is `reward × (rounds played / default rounds)`.
-- **Store items** are bought with debucks in `/store` and consumed/used from `contexts/GameContext.tsx`, persisted through the `user_inventory` table (or `localStorage` for guests) — same dual-mode pattern as everything else. Insight Lens is a one-time permanent unlock (the in-match "Insight" lifeline becomes unlimited-use once owned); Ace Cards and Confidence Pills are stackable consumables capped at `maxStock`. Ace Card price follows `baseCost × 2^(cards currently held)`, so it's tied to what's in inventory right now, not a running lifetime purchase count — spending them back down to 0 resets the price to base. The item catalog — including name, icon, description, price, category, stock cap, active/inactive, and Confidence Pill's heal amount — is fully admin-editable (Admin → Store → Items); only three `key`s (`insight_lens`, `ace_card`, `confidence_pill`) have actual in-match effects wired up — any other key an admin adds shows up in the Store as "Coming soon" until a developer hooks up what it does. Ace Card specifically is only debited from inventory *after* its AI call succeeds — if Groq errors or rate-limits, the player keeps their card and can just try again.
+- **Damage multiplier (`debots.multiplier`)** scales *that debot's* attack against the player, if set; a debot with no explicit multiplier falls back to the game-wide `judge_opp_dmg_multiplier` (Admin → AI → Judge & Scoring). The player's damage to the opponent always uses the flat, game-wide `judge_player_dmg_multiplier` instead, since that shouldn't vary per-debot.
+- **Judge scoring** — the prompt, score caps, HP-damage multipliers, impact-label thresholds, and win bonuses are all admin-editable (Admin → AI → Judge & Scoring, backed by `app_settings`; see `config/Judge.ts` for the shipped defaults and an honest accounting of exactly how much of this is tunable vs structurally fixed in code). There's also a client-side backstop (`isLowEffortInput()`), toggleable from the same screen, independent of the AI's own judgment — when on, low-effort/gibberish input gets zero gain and max penalty locally regardless of what the model returned, since LLMs tend to grade generously by default.
+- **Match reward** scales with rounds played: `opp.reward` is calibrated for `app_settings.rounds_default`, and the actual payout is `reward × (rounds played / default rounds)`, plus two conditional bonuses set in Admin → AI → Judge & Scoring: a no-penalty bonus (only if every round of the match scored 0 penalty) and a domination bonus (only if the final point margin clears an admin-set threshold).
+- **Store items** are bought with debucks in `/store` and consumed/used from `contexts/GameContext.tsx`, persisted through the `user_inventory` table (or `localStorage` for guests) — same dual-mode pattern as everything else. Insight Lens is a one-time permanent unlock (the in-match "Insight" lifeline becomes unlimited-use once owned); Ace Cards, Confidence Pills, and Revival Shots are stackable consumables capped at `maxStock`, each independently priced by one of four formulas an admin picks per item (Admin → Store → Items): flat, exponential (`base × multiplier^held`), linear (`multiplier × (held+1) × base`), or additive (`base + multiplier × held`) — all keyed off how many are *currently held*, not a running lifetime purchase count, so spending them back down brings the price back down too. Revival Shot heals to full HP rather than a fixed amount (`heal_full` on the item, distinct from Confidence Pill's numeric `heal_amount`). The item catalog is fixed to these four `key`s (`insight_lens`, `ace_card`, `confidence_pill`, `revival_shot`) — the only ones the in-match code actually checks — so Admin → Store → Items only tweaks their numbers now, it can't add or delete items. Ace Card specifically is only debited from inventory *after* its AI call succeeds — if Groq errors or rate-limits, the player keeps their card and can just try again.
 - **AI rate-limit fallback**: Groq's free tier caps tokens-per-day per model, not per account — `llama-3.3-70b-versatile` in particular has a much smaller daily budget than lighter models, so it's the one most likely to get rate-limited (HTTP 429) under real usage. `app/api/debate/route.ts` catches a 429 specifically and retries once against `ai_fallback_model` (default `llama-3.1-8b-instant`, editable in Admin → AI) before giving up — other error types (bad request, auth, etc.) aren't retried, since they'd fail identically on the fallback model too. Toggle off with `ai_fallback_enabled` if you'd rather it just fail loudly.
 - **Themes** change the whole app's look — colors, fonts, and (if set) a background image — the moment they're equipped, including the pre-login landing page (since `GameProvider` wraps the whole app from the root layout down, and the local/guest theme choice persists the same way as everything else). `config/Themes.ts` defines the CSS custom properties a theme can override (all 18 vars from `Debatto.css`, plus `--font-heading`/`--font-body`) and ships 3 starter themes as a fallback if `store_themes` is empty. Buying/equipping goes through `GameContext`'s `buyTheme`/`equipTheme`, same ownership pattern as debots (`user_themes` join table, or local storage for guests). Colors and fonts are applied globally by `components/shell/ThemeApplier.tsx`, mounted once in the root layout. Background image priority is handled per-surface: `app/(app)/layout.tsx` for the app shell, `components/shell/LandingThemeBg.tsx` for the landing page — if the equipped theme has its own background image, it overrides the site-wide background configured in Admin → Settings; if not, the site-wide background (if enabled) still shows through. The theme catalog is fully admin-editable (Admin → Store → Themes), including a live preview while editing.
 - **Settings flash prevention**: `roundOptions` starts empty (not a hardcoded fallback) and the Setup screen waits for `settingsLoaded` before rendering round-count buttons, so a stale default never flashes before the real admin-configured values arrive.
@@ -347,7 +398,7 @@ app/
   (app)/            # authenticated shell: layout.tsx has TopBar, RightDrawer, guarded-nav modal
     hub/            # post-landing mode-select screen
     offline/        # the main debate game loop
-    store/          # Insight Lens / Ace Cards / Confidence Pills, bought with debucks
+    store/          # Insight Lens / Ace Cards / Confidence Pills / Revival Shots, bought with debucks
     history/        # past match log, per-round breakdown
     settings/       # account (sign in/out), guest data reset
     profile/        # avatar, name, bio, stats

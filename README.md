@@ -16,10 +16,11 @@ Built with Next.js (App Router), TypeScript, Tailwind, and Supabase (Postgres + 
 | **History** (`/history`) | Playable — past match log with per-round breakdowns |
 | **Settings** (`/settings`) | Playable — account (sign in/out), guest data reset |
 | **Profile** (`/profile`) | Playable — avatar, name, bio, stats, read-only Player ID for logged-in users |
-| **Admin** (`/admin`) | Playable (admin-only) — manage debots, topics, store items, themes, and game settings |
+| **Admin** (`/admin`) | Playable (admin-only) — manage debots, topics, store items, themes, achievements, and game settings |
+| **Achievements** (`/achievements`) | Playable — admin-editable catalog (Admin → Achievements), auto-unlocked from match history + inventory, plus a manual-grant tool for one-off/cosmetic achievements |
+| **Learning** (`/learning`) | Playable — Documentation (argument structure, fallacies, technique), an AI Tutor chatbot, and a Game Guide |
 | **Online → Random** (`/online/random`) | Not built yet — schema ready (`matchmaking_queue`, `online_matches`, `online_match_rounds`, `try_match_player()` RPC) |
 | **Online → Friends** (`/online/friends`) | Not built yet — schema ready (`friendships` table) |
-| **Learning** (`/learning`) | Not built yet |
 
 ## Tech stack
 
@@ -116,6 +117,70 @@ create policy "store_themes_write_admin_only" on public.store_themes for all to 
 alter table public.user_themes enable row level security;
 create policy "Users manage their own theme unlocks" on public.user_themes for all to authenticated
   using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+-- achievements: public read, admin-only write
+create policy "achievements_select_all" on public.achievements for select using (true);
+create policy "achievements_write_admin_only" on public.achievements for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true));
+
+-- user_achievements: users manage their own unlocks (normal auto-unlock flow) —
+-- AND admins can manage any row (needed for Admin -> Achievements -> Manual
+-- Grants). Both are separate PERMISSIVE policies, so either condition passing
+-- is enough; a non-admin still can't touch another user's rows.
+alter table public.user_achievements enable row level security;
+create policy "Users manage their own achievement unlocks" on public.user_achievements for all to authenticated
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "Admins manage all achievement unlocks" on public.user_achievements for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true));
+
+-- profiles: admins can look up any player by player_id (Manual Grants search).
+-- Add this even if you already have some other profiles select policy —
+-- multiple permissive select policies combine with OR, so this only adds
+-- access, it can't accidentally take any away.
+create policy "Admins can read all profiles" on public.profiles for select to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true));
+```
+
+### Achievements migration
+
+Run once to create the catalog + per-user unlocks tables, add `used_item` to `matches` (needed for the "win without using an item" condition type), and seed the six starter achievements (matching `config/Achievements.ts` — also the reference to restore any by hand if deleted):
+
+```sql
+alter table public.matches add column if not exists used_item boolean not null default false;
+
+create table if not exists public.achievements (
+  id uuid primary key default gen_random_uuid(),
+  key text not null unique,
+  name text not null,
+  description text,
+  icon text,
+  condition_type text not null,
+  condition_config jsonb not null default '{}',
+  reward_debucks numeric not null default 0,
+  reward_theme_id uuid references public.store_themes(id) on delete set null,
+  active boolean not null default true,
+  sort_order int default 0
+);
+alter table public.achievements enable row level security;
+
+create table if not exists public.user_achievements (
+  user_id uuid references auth.users(id) on delete cascade,
+  achievement_id uuid references public.achievements(id) on delete cascade,
+  unlocked_at timestamptz default now(),
+  primary key (user_id, achievement_id)
+);
+
+insert into public.achievements (key, name, icon, description, condition_type, condition_config, reward_debucks, sort_order)
+values
+  ('first_blood', 'First Blood', '🏆', 'Win your first debate.', 'total_wins', '{"count":1}', 10, 0),
+  ('on_a_roll', 'On a Roll', '🔥', 'Win 3 matches in a row.', 'win_streak', '{"count":3}', 20, 1),
+  ('clean_sweep', 'Clean Sweep', '🧠', 'Win a match without using any item.', 'no_item_win', '{}', 25, 2),
+  ('ace_hoarder', 'Ace Hoarder', '🂡', 'Buy Ace Cards up to the max stock at once.', 'item_maxed', '{"itemKey":"ace_card"}', 15, 3),
+  ('third_eye', 'Third Eye', '🔍', 'Unlock the Insight Lens.', 'insight_lens_owned', '{}', 10, 4),
+  ('veteran', 'Veteran Debater', '🎖', 'Win 25 matches total.', 'total_wins', '{"count":25}', 100, 5)
+on conflict (key) do nothing;
 ```
 
 ### Store & Themes migration

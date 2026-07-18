@@ -15,6 +15,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useGame } from "@/contexts/GameContext";
 import { callAI } from "@/lib/ai";
 import { DEFAULT_THEMES, FONT_PRESETS } from "@/config/Themes";
+import { CONDITION_TYPE_META, AchievementConditionType } from "@/config/Achievements";
 
 const supabase = createClient();
 
@@ -123,7 +124,7 @@ function useDragReorder(onCommit: (from: number, to: number) => void) {
 }
 
 export function AdminPanel({ profile }: AdminPanelProps) {
-  const [tab, setTab] = useState<"debots" | "topics" | "store" | "settings" | "ai">("debots");
+  const [tab, setTab] = useState<"debots" | "topics" | "store" | "achievements" | "settings" | "ai">("debots");
 
   // Fail closed: no profile, or not an admin -> render nothing at all.
   if (!profile?.is_admin) return null;
@@ -138,6 +139,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
           ["debots", "Debots"],
           ["topics", "Topics"],
           ["store", "Store"],
+          ["achievements", "Achievements"],
           ["settings", "Settings"],
           ["ai", "AI"],
         ] as const).map(([t, label]) => (
@@ -154,6 +156,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
       {tab === "debots" && <DebotsAdmin />}
       {tab === "topics" && <TopicsAdmin />}
       {tab === "store" && <StoreAdmin />}
+      {tab === "achievements" && <AchievementsAdmin />}
       {tab === "settings" && <SettingsAdmin />}
       {tab === "ai" && <AiSettingsAdmin />}
     </div>
@@ -1253,6 +1256,363 @@ function ThemesAdmin() {
           ))}
         </div>
       )}
+      {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+    </div>
+  );
+}
+
+// ===========================================================================
+// ACHIEVEMENTS — admin-editable catalog (auto-unlocked via condition types
+// evaluated in lib/achievements.ts) plus a manual-grant tool for "manual"
+// achievements, which never unlock on their own.
+// ===========================================================================
+
+const BLANK_ACHIEVEMENT = {
+  id: null as any,
+  key: "",
+  name: "",
+  icon: "🏅",
+  description: "",
+  condition_type: "total_wins" as AchievementConditionType,
+  condition_config: { count: 5 } as Record<string, any>,
+  reward_debucks: 10,
+  reward_theme_id: null as string | null,
+  active: true,
+};
+
+function AchievementsAdmin() {
+  const [sub, setSub] = useState<"catalog" | "grants">("catalog");
+  return (
+    <div>
+      <div style={{ display: "inline-flex", gap: 4, background: "var(--faint)", borderRadius: 999, padding: 3, marginBottom: 14 }}>
+        {(["catalog", "grants"] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setSub(s)}
+            style={{
+              border: "none", cursor: "pointer", borderRadius: 999,
+              padding: "5px 14px", fontSize: 12, fontWeight: 600, textTransform: "capitalize",
+              background: sub === s ? "var(--surface2)" : "transparent",
+              color: sub === s ? "var(--text)" : "var(--muted)",
+            }}
+          >
+            {s === "grants" ? "Manual Grants" : s}
+          </button>
+        ))}
+      </div>
+      {sub === "catalog" ? <AchievementsCatalogAdmin /> : <AchievementsGrantsAdmin />}
+    </div>
+  );
+}
+
+function AchievementsCatalogAdmin() {
+  const { refetchAchievements, opps, themes } = useGame();
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<any>(null);
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<any>(null);
+  const [status, setStatus] = useState("");
+
+  async function load() {
+    setLoading(true);
+    const { data, error } = await supabase.from("achievements").select("*").order("sort_order", { ascending: true, nullsFirst: false }).order("id", { ascending: true });
+    if (error) setStatus(`Failed to load: ${error.message}`);
+    else setItems(data || []);
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function commitReorder(from: number, to: number) {
+    const newList = reorderArray(items, from, to);
+    setItems(newList);
+    await Promise.all(newList.map((it, idx) => supabase.from("achievements").update({ sort_order: idx }).eq("id", it.id)));
+    refetchAchievements();
+  }
+  const reorder = useDragReorder(commitReorder);
+
+  function startEdit(a: any) { setConfirmingDeleteId(null); setEditing({ ...a, condition_config: a.condition_config || {} }); }
+  function startNew() { setConfirmingDeleteId(null); setEditing({ ...BLANK_ACHIEVEMENT }); }
+  function cancelEdit() { setEditing(null); }
+  function updateField(key: string, value: any) { setEditing((prev: any) => ({ ...prev, [key]: value })); }
+  function updateConfig(key: string, value: any) { setEditing((prev: any) => ({ ...prev, condition_config: { ...prev.condition_config, [key]: value } })); }
+
+  async function save() {
+    if (!editing?.key?.trim() || !editing?.name?.trim()) {
+      setStatus("Key and name are both required.");
+      return;
+    }
+    const meta = CONDITION_TYPE_META[editing.condition_type as AchievementConditionType];
+    const config: Record<string, any> = {};
+    if (meta?.needsCount) config.count = Number(editing.condition_config?.count) || 1;
+    if (meta?.needsDebot && editing.condition_config?.debotId !== "" && editing.condition_config?.debotId != null) {
+      config.debotId = editing.condition_config.debotId;
+    }
+    if (meta?.needsItemKey) config.itemKey = editing.condition_config?.itemKey || "ace_card";
+
+    setStatus("Saving…");
+    const payload = {
+      key: editing.key.trim(),
+      name: editing.name.trim(),
+      icon: editing.icon?.trim() || "🏅",
+      description: editing.description || "",
+      condition_type: editing.condition_type,
+      condition_config: config,
+      reward_debucks: Number(editing.reward_debucks) || 0,
+      reward_theme_id: editing.reward_theme_id || null,
+      active: !!editing.active,
+    };
+    const res = editing.id
+      ? await supabase.from("achievements").update(payload).eq("id", editing.id).select()
+      : await supabase.from("achievements").insert({ ...payload, sort_order: items.length }).select().single();
+
+    if (res.error) { setStatus(`Failed: ${res.error.message}`); return; }
+    setStatus(editing.id ? "Achievement updated." : "Achievement created.");
+    setEditing(null);
+    load();
+    refetchAchievements();
+  }
+
+  async function confirmDelete(id: any) {
+    setStatus("Deleting…");
+    const { error } = await supabase.from("achievements").delete().eq("id", id);
+    setConfirmingDeleteId(null);
+    if (error) setStatus(`Failed to delete: ${error.message}`);
+    else { setStatus("Achievement deleted."); load(); refetchAchievements(); }
+  }
+
+  if (editing) {
+    const meta = CONDITION_TYPE_META[editing.condition_type as AchievementConditionType];
+    return (
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
+          {editing.id ? `Edit: ${editing.name || "Achievement"}` : "New Achievement"}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+          <LabeledInput label="Key" value={editing.key} onChange={(v) => updateField("key", v)} disabled={!!editing.id} />
+          <LabeledInput label="Icon (emoji)" value={editing.icon} onChange={(v) => updateField("icon", v)} />
+        </div>
+        <LabeledInput label="Name" value={editing.name} onChange={(v) => updateField("name", v)} />
+        <div style={{ marginTop: 10 }}>
+          <LabeledTextarea label="Description" value={editing.description} onChange={(v) => updateField("description", v)} />
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Unlock condition</label>
+          <select
+            className="input-field"
+            value={editing.condition_type}
+            onChange={(e) => updateField("condition_type", e.target.value)}
+            style={{ width: "100%" }}
+          >
+            {(Object.keys(CONDITION_TYPE_META) as AchievementConditionType[]).map((ct) => (
+              <option key={ct} value={ct}>{CONDITION_TYPE_META[ct].label}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}>{meta?.hint}</div>
+        </div>
+
+        {meta?.needsCount && (
+          <div style={{ marginTop: 10 }}>
+            <LabeledInput label="Count" value={editing.condition_config?.count ?? ""} onChange={(v) => updateConfig("count", v)} type="number" />
+          </div>
+        )}
+        {meta?.needsDebot && (
+          <div style={{ marginTop: 10 }}>
+            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Debot (blank = any debot, if allowed)</label>
+            <select
+              className="input-field"
+              value={editing.condition_config?.debotId ?? ""}
+              onChange={(e) => updateConfig("debotId", e.target.value === "" ? null : e.target.value)}
+              style={{ width: "100%" }}
+            >
+              <option value="">— Any debot —</option>
+              {opps.map((o: any) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+          </div>
+        )}
+        {meta?.needsItemKey && (
+          <div style={{ marginTop: 10 }}>
+            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Item</label>
+            <select
+              className="input-field"
+              value={editing.condition_config?.itemKey || "ace_card"}
+              onChange={(e) => updateConfig("itemKey", e.target.value)}
+              style={{ width: "100%" }}
+            >
+              <option value="ace_card">Ace Card</option>
+              <option value="confidence_pill">Confidence Pill</option>
+            </select>
+          </div>
+        )}
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+          <LabeledInput label="Reward (debucks)" value={editing.reward_debucks} onChange={(v) => updateField("reward_debucks", v)} type="number" />
+          <div>
+            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Reward theme (optional)</label>
+            <select
+              className="input-field"
+              value={editing.reward_theme_id || ""}
+              onChange={(e) => updateField("reward_theme_id", e.target.value || null)}
+              style={{ width: "100%" }}
+            >
+              <option value="">— None —</option>
+              {themes.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12, fontSize: 12, color: "var(--text)" }}>
+          <input type="checkbox" checked={!!editing.active} onChange={(e) => updateField("active", e.target.checked)} />
+          Active — visible in Achievements
+        </label>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
+          <button className="btn btn-ghost btn-sm" onClick={cancelEdit}>Cancel</button>
+        </div>
+        {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: "var(--muted)" }}>{items.length} achievements</span>
+        <button className="btn btn-primary btn-sm" onClick={startNew}>+ New Achievement</button>
+      </div>
+      {loading ? (
+        <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
+          {items.map((a, i) => (
+            <div key={a.id} ref={reorder.setRowRef(i)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", opacity: a.active === false ? 0.5 : 1, ...reorder.rowStyle(i) }}>
+              <span {...reorder.handleProps(i)}>⠿</span>
+              <span style={{ fontSize: 18 }}>{a.icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>
+                  <code>{a.key}</code> · {CONDITION_TYPE_META[a.condition_type as AchievementConditionType]?.label || a.condition_type}
+                  {a.reward_debucks ? ` · +${a.reward_debucks} debucks` : ""}
+                  {a.active === false && " · inactive"}
+                </div>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={() => startEdit(a)}>Edit</button>
+              {confirmingDeleteId === a.id ? (
+                <>
+                  <button className="btn btn-danger btn-sm" onClick={() => confirmDelete(a.id)}>Confirm</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setConfirmingDeleteId(null)}>Cancel</button>
+                </>
+              ) : (
+                <button className="btn btn-ghost btn-sm" onClick={() => setConfirmingDeleteId(a.id)}>Delete</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+    </div>
+  );
+}
+
+// Manual grants: for "manual"-type achievements (never auto-unlocked), an
+// admin looks a player up by their Player ID and grants/revokes directly.
+// Relies on an admin-scoped RLS policy on user_achievements (see README) —
+// the same "admin can write rows that aren't their own" pattern as nowhere
+// else in this app yet, since every other admin write target is a public
+// catalog table, not a per-user join table.
+function AchievementsGrantsAdmin() {
+  const [playerId, setPlayerId] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [foundUser, setFoundUser] = useState<any>(null);
+  const [manualAchievements, setManualAchievements] = useState<any[]>([]);
+  const [grantedIds, setGrantedIds] = useState<string[]>([]);
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    supabase.from("achievements").select("*").eq("condition_type", "manual").then(({ data }) => {
+      setManualAchievements(data || []);
+    });
+  }, []);
+
+  async function search() {
+    const trimmed = playerId.trim();
+    if (!trimmed) return;
+    setSearching(true);
+    setStatus("");
+    setFoundUser(null);
+    const { data, error } = await supabase.from("profiles").select("id, name, player_id").eq("player_id", trimmed).maybeSingle();
+    setSearching(false);
+    if (error || !data) {
+      setStatus("No player found with that ID.");
+      return;
+    }
+    setFoundUser(data);
+    const { data: granted } = await supabase.from("user_achievements").select("achievement_id").eq("user_id", data.id);
+    setGrantedIds((granted || []).map((r: any) => r.achievement_id));
+  }
+
+  async function grant(achievementId: string) {
+    if (!foundUser) return;
+    setStatus("Granting…");
+    const { error } = await supabase.from("user_achievements").upsert(
+      { user_id: foundUser.id, achievement_id: achievementId, unlocked_at: new Date().toISOString() },
+      { onConflict: "user_id,achievement_id" }
+    );
+    if (error) { setStatus(`Failed: ${error.message} — check the admin RLS policy on user_achievements exists.`); return; }
+    setGrantedIds((prev) => [...prev, achievementId]);
+    setStatus("Granted.");
+  }
+
+  async function revoke(achievementId: string) {
+    if (!foundUser) return;
+    setStatus("Revoking…");
+    const { error } = await supabase.from("user_achievements").delete().eq("user_id", foundUser.id).eq("achievement_id", achievementId);
+    if (error) { setStatus(`Failed: ${error.message}`); return; }
+    setGrantedIds((prev) => prev.filter((id) => id !== achievementId));
+    setStatus("Revoked.");
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 12, lineHeight: 1.5 }}>
+        Only achievements with the "Manual" condition type show up here — everything else unlocks on its own. Look a player up by
+        their 9-digit Player ID (visible on their own Profile page).
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input className="input-field" placeholder="Player ID" value={playerId} onChange={(e) => setPlayerId(e.target.value)} style={{ flex: 1 }} />
+        <button className="btn btn-primary btn-sm" onClick={search} disabled={searching}>{searching ? "Searching…" : "Search"}</button>
+      </div>
+
+      {foundUser && (
+        <div className="card" style={{ padding: 12, marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>{foundUser.name}</div>
+          <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>ID: {foundUser.player_id}</div>
+        </div>
+      )}
+
+      {foundUser && manualAchievements.length === 0 && (
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>No manual-type achievements exist yet — create one in Catalog first.</div>
+      )}
+
+      {foundUser && manualAchievements.map((a) => {
+        const granted = grantedIds.includes(a.id);
+        return (
+          <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", marginBottom: 6 }}>
+            <span style={{ fontSize: 18 }}>{a.icon}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>{a.description}</div>
+            </div>
+            {granted ? (
+              <button className="btn btn-ghost btn-sm" onClick={() => revoke(a.id)}>Revoke</button>
+            ) : (
+              <button className="btn btn-primary btn-sm" onClick={() => grant(a.id)}>Grant</button>
+            )}
+          </div>
+        );
+      })}
       {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
     </div>
   );

@@ -19,6 +19,8 @@ import { createClient } from "@/utils/supabase/client";
 import { saveGameData, loadGameData, syncLocalToDB, loadPinnedTopics, togglePinnedTopic, deleteTopic as deleteTopicRecord, loadHiddenTopics } from "@/lib/persistenceManager";
 import { GAME_CONFIG, DEFAULT_STORE_ITEMS, StoreItemDef } from "@/config/Game"; // now also provides GAME_CONFIG.store (insight lens / ace card / confidence pill pricing)
 import { DEFAULT_THEMES, StoreTheme } from "@/config/Themes";
+import { DEFAULT_ACHIEVEMENTS, AchievementDef } from "@/config/Achievements";
+import { getNewlyUnlocked, normalizeMatch } from "@/lib/achievements";
 
 const supabase = createClient();
 const DEFAULT_NAME = GAME_CONFIG.defaultName;
@@ -79,6 +81,12 @@ type GameContextValue = {
   buyTheme: (themeId: string) => Promise<void>;
   equipTheme: (themeId: string | null) => void;
   refetchThemes: () => Promise<void>;
+
+  achievements: AchievementDef[];
+  achievementsLoading: boolean;
+  unlockedAchievementIds: string[];
+  refetchAchievements: () => Promise<void>;
+  checkAchievements: (opts?: { extraMatch?: any; baseCoins?: number }) => Promise<AchievementDef[]>;
 
   topics: any[];
   topicsLoading: boolean;
@@ -435,6 +443,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
       setInventory((inv) => ({ ...inv, insightLens: true }));
       upProfile({ coins: profile.coins - cost });
+      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { insightLens: true } }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase Insight Lens. Please try again.");
@@ -463,6 +472,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
       setInventory((inv) => ({ ...inv, aceCards: nextCards }));
       upProfile({ coins: profile.coins - cost });
+      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { aceCards: nextCards } }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase Ace Card. Please try again.");
@@ -491,6 +501,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
       setInventory((inv) => ({ ...inv, confidencePills: nextPills }));
       upProfile({ coins: profile.coins - cost });
+      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { confidencePills: nextPills } }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase Confidence Pill. Please try again.");
@@ -659,6 +670,101 @@ export function GameProvider({ children }: { children: ReactNode }) {
       return;
     }
     upProfile({ equipped_theme_id: themeId });
+  }
+
+  // ── ACHIEVEMENTS: admin-editable catalog + per-user unlocks. Catalog is
+  // public and independent of the signed-in user; unlocks aren't. ──
+  const [achievements, setAchievements] = useState<AchievementDef[]>(DEFAULT_ACHIEVEMENTS);
+  const [achievementsLoading, setAchievementsLoading] = useState(true);
+  const [unlockedAchievementIds, setUnlockedAchievementIds] = useState<string[]>([]);
+
+  const fetchAchievements = async () => {
+    setAchievementsLoading(true);
+    const { data, error } = await supabase
+      .from("achievements")
+      .select("*")
+      .order("sort_order", { ascending: true, nullsFirst: false });
+
+    if (error || !data || data.length === 0) {
+      setAchievements(DEFAULT_ACHIEVEMENTS);
+      setAchievementsLoading(false);
+      return;
+    }
+
+    setAchievements(
+      data.map((row: any) => ({
+        id: row.id,
+        key: row.key,
+        name: row.name,
+        description: row.description || "",
+        icon: row.icon || "🏅",
+        conditionType: row.condition_type,
+        conditionConfig: row.condition_config || {},
+        rewardDebucks: row.reward_debucks ?? 0,
+        rewardThemeId: row.reward_theme_id ?? null,
+        active: row.active !== false,
+        sortOrder: row.sort_order ?? 0,
+      }))
+    );
+    setAchievementsLoading(false);
+  };
+
+  useEffect(() => {
+    fetchAchievements();
+  }, []);
+
+  useEffect(() => {
+    const fetchUnlocked = async () => {
+      const res = await loadGameData("achievements", user);
+      setUnlockedAchievementIds(res.ok && Array.isArray(res.data) ? res.data : []);
+    };
+    fetchUnlocked();
+  }, [user]);
+
+  // Evaluates every active, not-yet-unlocked achievement against the user's
+  // current match history + inventory, persists + rewards any that newly
+  // qualify, and returns them so the caller can show a toast/notification.
+  //
+  // `extraMatch` lets a caller (the offline battle screen, right after a
+  // match) pass the just-finished match record in directly rather than
+  // trusting that its own save landed before this read runs — it's merged
+  // into the fetched history (deduped by id) instead of raced against it.
+  // `baseCoins` lets a caller supply the coin total it already knows is
+  // about to be true (e.g. mid-reward-payout) instead of reading the
+  // possibly-stale `profile.coins` closure.
+  async function checkAchievements(opts: { extraMatch?: any; baseCoins?: number; inventoryOverride?: Partial<Inventory> } = {}): Promise<AchievementDef[]> {
+    const historyRes = await loadGameData("history", user);
+    let rawHistory: any[] = historyRes.ok && Array.isArray(historyRes.data) ? historyRes.data : [];
+    if (opts.extraMatch && !rawHistory.some((m: any) => m.id && m.id === opts.extraMatch.id)) {
+      rawHistory = [...rawHistory, opts.extraMatch];
+    }
+    const matchHistory = rawHistory.map(normalizeMatch).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+    const newly = getNewlyUnlocked(achievements, unlockedAchievementIds, {
+      matchHistory,
+      inventory: opts.inventoryOverride ? { ...inventory, ...opts.inventoryOverride } : inventory,
+      storeItems,
+    });
+    if (newly.length === 0) return [];
+
+    for (const a of newly) {
+      const res = await saveGameData("achievements", { achievementId: a.id }, user);
+      if (!res.ok) console.error(res.error);
+      if (a.rewardThemeId) {
+        const themeRes = await saveGameData("themes", { themeId: a.rewardThemeId }, user);
+        if (themeRes.ok) setOwnedThemeIds((prev) => (prev.includes(a.rewardThemeId!) ? prev : [...prev, a.rewardThemeId!]));
+      }
+    }
+
+    setUnlockedAchievementIds((prev) => [...prev, ...newly.map((a) => a.id)]);
+
+    const totalDebucks = newly.reduce((sum, a) => sum + (a.rewardDebucks || 0), 0);
+    if (totalDebucks > 0) {
+      const base = typeof opts.baseCoins === "number" ? opts.baseCoins : profile.coins;
+      upProfile({ coins: base + totalDebucks });
+    }
+
+    return newly;
   }
 
   // ── PINNED TOPICS ──
@@ -859,6 +965,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
         buyTheme,
         equipTheme,
         refetchThemes: fetchThemes,
+        achievements,
+        achievementsLoading,
+        unlockedAchievementIds,
+        refetchAchievements: fetchAchievements,
+        checkAchievements,
         topics,
         topicsLoading,
         saveCustomTopic,

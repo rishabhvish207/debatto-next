@@ -170,7 +170,6 @@ export default function OfflinePage() {
   // below, so the achievement check on "Continue" doesn't have to race
   // against that write landing in Supabase/localStorage first.
   const lastMatchRecordRef = useRef<any>(null);
-  const [unlockedToast, setUnlockedToast] = useState<any[]>([]);
 
   // ── SAVE MATCH RESULT ──
   // Fires once, the moment the Result page is reached. Guarded by a ref so
@@ -567,20 +566,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
           filter: "blur(80px)", zIndex: -1, pointerEvents: "none", transition: "background 0.8s ease"
         }} />
 
-        {unlockedToast.length > 0 && (
-          <div className="card anim-pop" style={{ padding: "12px 14px", marginBottom: 16, borderColor: "var(--amber)", background: "var(--amber-soft)" }}>
-            {unlockedToast.map((a) => (
-              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-                <span style={{ fontSize: 22 }}>{a.icon}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--amber)" }}>Achievement unlocked: {a.name}</div>
-                  <div style={{ fontSize: 11, color: "var(--muted)" }}>{a.description}{a.rewardDebucks ? ` · +${a.rewardDebucks} debucks` : ""}</div>
-                </div>
-              </div>
-            ))}
-            <button className="btn btn-ghost btn-sm" style={{ marginTop: 4 }} onClick={() => setUnlockedToast([])}>Dismiss</button>
-          </div>
-        )}
+        {/* Achievement unlocks now show as a global popup (contexts/GameContext.tsx) — fires wherever the person is, not just here. */}
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
           <div style={{ flex: 1 }} />
@@ -1068,8 +1054,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
           onClick={async () => {
             const finalCoins = won ? profile.coins + totalReward : profile.coins;
             if (won) upProfile({ coins: finalCoins, wins: profile.wins + 1 });
-            const newly = await checkAchievements({ extraMatch: lastMatchRecordRef.current, baseCoins: finalCoins }).catch(() => []);
-            if (newly.length) setUnlockedToast(newly);
+            await checkAchievements({ extraMatch: lastMatchRecordRef.current, baseCoins: finalCoins }).catch(() => []);
             setPage("setup");
           }}
         >

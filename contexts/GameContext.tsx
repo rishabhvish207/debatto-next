@@ -92,6 +92,8 @@ type GameContextValue = {
   unlockedAchievementIds: string[];
   refetchAchievements: () => Promise<void>;
   checkAchievements: (opts?: { extraMatch?: any; baseCoins?: number }) => Promise<AchievementDef[]>;
+  pendingAchievementPopups: AchievementDef[];
+  dismissAchievementPopup: () => void;
 
   topics: any[];
   topicsLoading: boolean;
@@ -184,7 +186,19 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const savingTopicRef = useRef(false);
 
   const fetchProfile = async (userId: string) => {
-    const { data } = await supabase.from("profiles").select("*").eq("id", userId).single();
+    const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).single();
+    if (error) {
+      // This used to be silently swallowed — a failed fetch (RLS error,
+      // network blip, anything) just left `profile` sitting at whatever it
+      // was a moment before (usually the pre-login guest snapshot: no name,
+      // no admin flag, no player ID), with nothing in the console and
+      // nothing telling the person their real account never actually
+      // loaded. Surfacing it doesn't fix the underlying cause, but it turns
+      // "my account randomly disappears" into a visible, debuggable error.
+      console.error("fetchProfile failed:", error);
+      setApiError("Couldn't load your profile — check the 'profiles' table's SELECT policy for logged-in users.");
+      return;
+    }
     if (data) {
       setProfile({
         name: data.name,
@@ -294,48 +308,65 @@ export function GameProvider({ children }: { children: ReactNode }) {
   };
 
   // ── AUTH BOOTSTRAP + GUEST->LOGIN SYNC ──
+  //
+  // This used to also call supabase.auth.getSession() directly in its own
+  // effect, in addition to this listener — but onAuthStateChange already
+  // fires once on subscribe with whatever session currently exists (that's
+  // documented Supabase behavior), so the two were doing the same job
+  // concurrently and racing: both called setUser()/fetchProfile() close
+  // together, and there was no ordering guarantee about which one's result
+  // "won." Relying on just this listener removes that race entirely.
+  //
+  // Separately: syncLocalToDB was only guarded by `event === "SIGNED_IN"`,
+  // but Supabase can (and does, in some client versions/situations) fire
+  // SIGNED_IN not just on a fresh sign-in but also when an *existing*
+  // session is simply restored on page load or tab focus — so that guard
+  // alone let guest-progress migration re-run on every reload of an
+  // already-logged-in tab, repeatedly re-merging (or re-clobbering) profile
+  // data. The marker below makes it run at most once per user id per
+  // browser tab, regardless of how many times the event fires.
   useEffect(() => {
-    const getSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
+    const syncedThisTab = new Set<string>();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event: any, session: any) => {
       setUser(session?.user || null);
+
       if (session?.user) {
-        fetchProfile(session.user.id);
+        const uid = session.user.id;
+        const marker = `debatto:synced:${uid}`;
+        const alreadySynced = syncedThisTab.has(uid) || sessionStorage.getItem(marker) === "1";
+
+        if (event === "SIGNED_IN" && !alreadySynced) {
+          syncedThisTab.add(uid);
+          sessionStorage.setItem(marker, "1");
+          syncLocalToDB({ id: uid }).then((sync) => {
+            if (!sync.ok) {
+              console.error(sync.errors);
+              setApiError("Some guest progress failed to sync. Please check your data.");
+              // Don't leave a marker behind for a sync that didn't actually
+              // finish — let it retry on the next sign-in in this tab.
+              syncedThisTab.delete(uid);
+              sessionStorage.removeItem(marker);
+            }
+          });
+        }
+        fetchProfile(uid);
       } else {
+        // No session — either nothing's ever been signed in on this tab, or
+        // this is a real sign-out. Either way, show whatever's cached
+        // locally for this guest browser (not just hardcoded starting
+        // values), same as a signed-out account should always see its own
+        // local progress rather than a reset-looking blank slate.
         const local = await loadGameData("profile", null);
         const localData: any = (local.ok && local.data) ? local.data : null;
         if (localData) {
-          // Guests never get a player_id — that's reserved for logged-in
-          // accounts (see fetchProfile). Strip it out in case an older
-          // build of this app ever wrote one locally.
           if ("player_id" in localData) delete localData.player_id;
           setProfile((p) => ({ ...p, ...localData }));
         } else {
-          // First time we're seeing this guest at all — seed the real
-          // starting balance once and persist it, rather than leaving the
-          // brief pre-fetch placeholder state to flash a number that isn't
-          // actually theirs yet.
           const seeded = { coins: GAME_CONFIG.economy.startingCoins };
           setProfile((p) => ({ ...p, ...seeded }));
           saveGameData("profile", seeded, null);
         }
-      }
-    };
-    getSession();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (event: any, session: any) => {
-      setUser(session?.user || null);
-      if (session?.user) {
-        if (event === "SIGNED_IN") {
-          syncLocalToDB({ id: session.user.id }).then((sync) => {
-            if (!sync.ok) {
-              console.error(sync.errors);
-              setApiError("Some guest progress failed to sync. Please check your data.");
-            }
-          });
-        }
-        fetchProfile(session.user.id);
-      } else {
-        setProfile({ name: DEFAULT_NAME, coins: GAME_CONFIG.economy.startingCoins, wins: 0, is_admin: false });
       }
     });
 
@@ -743,6 +774,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [achievements, setAchievements] = useState<AchievementDef[]>(DEFAULT_ACHIEVEMENTS);
   const [achievementsLoading, setAchievementsLoading] = useState(true);
   const [unlockedAchievementIds, setUnlockedAchievementIds] = useState<string[]>([]);
+  // A global popup queue, not tied to any one page — checkAchievements can
+  // be triggered from a match (offline/page.tsx) or a store purchase
+  // (store/page.tsx via GameContext itself), and either way the person
+  // should see the popup wherever they currently are. Rendered once, at
+  // the bottom of this provider, so it's available app-wide for free.
+  const [pendingAchievementPopups, setPendingAchievementPopups] = useState<AchievementDef[]>([]);
+  const dismissAchievementPopup = () => setPendingAchievementPopups((q) => q.slice(1));
 
   const fetchAchievements = async () => {
     setAchievementsLoading(true);
@@ -823,6 +861,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     }
 
     setUnlockedAchievementIds((prev) => [...prev, ...newly.map((a) => a.id)]);
+    setPendingAchievementPopups((q) => [...q, ...newly]);
 
     const totalDebucks = newly.reduce((sum, a) => sum + (a.rewardDebucks || 0), 0);
     if (totalDebucks > 0) {
@@ -1092,6 +1131,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         unlockedAchievementIds,
         refetchAchievements: fetchAchievements,
         checkAchievements,
+        pendingAchievementPopups,
+        dismissAchievementPopup,
         topics,
         topicsLoading,
         saveCustomTopic,
@@ -1120,6 +1161,56 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }}
     >
       {children}
+      <AchievementPopupHost popup={pendingAchievementPopups[0]} onDismiss={dismissAchievementPopup} />
     </GameContext.Provider>
+  );
+}
+
+// Rendered once, app-wide, from inside GameProvider so it fires no matter
+// which page triggered the unlock (a match result, a store purchase,
+// anything else that calls checkAchievements in the future). Shows one
+// achievement at a time — a second unlock in the same beat just waits its
+// turn in the queue rather than stacking modals.
+function AchievementPopupHost({ popup, onDismiss }: { popup: AchievementDef | undefined; onDismiss: () => void }) {
+  if (!popup) return null;
+  return (
+    <div
+      onClick={onDismiss}
+      style={{
+        position: "fixed", inset: 0, zIndex: 9999,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="anim-pop"
+        style={{
+          background: "var(--surface)", border: "1px solid var(--amber)", borderRadius: "var(--r)",
+          padding: 28, maxWidth: 340, width: "100%", textAlign: "center",
+          boxShadow: "0 0 40px rgba(245,166,35,0.25)",
+        }}
+      >
+        <div style={{ fontSize: 11, color: "var(--amber)", letterSpacing: "0.15em", textTransform: "uppercase", marginBottom: 10 }}>
+          Achievement Unlocked
+        </div>
+        <div
+          style={{
+            width: 72, height: 72, borderRadius: "50%", margin: "0 auto 14px",
+            background: "var(--amber-soft)", display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 36,
+          }}
+        >
+          {popup.icon}
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>{popup.name}</div>
+        <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 14 }}>{popup.description}</div>
+        {popup.rewardDebucks > 0 && (
+          <div style={{ fontSize: 14, color: "var(--amber)", fontWeight: 700, marginBottom: 18 }}>+{popup.rewardDebucks} debucks</div>
+        )}
+        <button className="btn btn-primary btn-sm" style={{ width: "100%" }} onClick={onDismiss}>Nice</button>
+      </div>
+    </div>
   );
 }

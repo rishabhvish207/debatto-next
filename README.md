@@ -71,30 +71,94 @@ The app expects specific tables, columns, and **Row Level Security policies** in
 
 ### Required RLS policies
 
+**If you ran the SQL from an earlier version of this README (before this section existed in its
+current form), run this fix first** — it corrects a real bug: a policy that was added on
+`public.profiles` queried `public.profiles` *from inside its own condition*. Postgres RLS
+policies are combined with OR, but if any one of them **errors** while being evaluated, the whole
+query fails even though a different, perfectly valid policy would have allowed it — so this one
+bad policy broke *every* profile read for *every* logged-in user (not just admins), which is why
+sign-in looked like "my account disappeared": the profile fetch was silently failing (see the
+`fetchProfile` fix below), leaving the UI stuck showing pre-login guest defaults — no name, no
+admin badge, player ID stuck at "…".
+
+```sql
+-- A SECURITY DEFINER function bypasses RLS *inside itself* — this is the
+-- only safe way to check "is this user an admin?" from within a policy on
+-- profiles itself. A plain `exists (select 1 from profiles where ...)`
+-- inside a profiles policy re-triggers profiles' own RLS to evaluate that
+-- subquery, which re-triggers the same policy again — this doesn't
+-- infinite-loop forever, but it does make Postgres bail out with an error,
+-- and that error fails the whole statement even where a different policy
+-- would've allowed it.
+create or replace function public.is_admin()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select coalesce((select is_admin from public.profiles where id = auth.uid()), false);
+$$;
+
+-- Replaces the broken "Admins can read all profiles" policy from before.
+drop policy if exists "Admins can read all profiles" on public.profiles;
+create policy "Admins can read all profiles" on public.profiles for select to authenticated
+  using (public.is_admin());
+
+-- The other admin-write policies below weren't recursive (they're each on
+-- a *different* table than profiles, so no self-reference), but they all
+-- repeated the same subquery — swapping them to the function too means
+-- there's exactly one place this logic lives.
+drop policy if exists "Admins can insert debots" on public.debots;
+drop policy if exists "Admins can update debots" on public.debots;
+drop policy if exists "Admins can delete debots" on public.debots;
+create policy "Admins can insert debots" on public.debots for insert to authenticated with check (public.is_admin());
+create policy "Admins can update debots" on public.debots for update to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy "Admins can delete debots" on public.debots for delete to authenticated using (public.is_admin());
+
+drop policy if exists "app_settings_write_admin_only" on public.app_settings;
+create policy "app_settings_write_admin_only" on public.app_settings for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "store_items_write_admin_only" on public.store_items;
+create policy "store_items_write_admin_only" on public.store_items for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "store_themes_write_admin_only" on public.store_themes;
+create policy "store_themes_write_admin_only" on public.store_themes for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "achievements_write_admin_only" on public.achievements;
+create policy "achievements_write_admin_only" on public.achievements for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "Admins manage all achievement unlocks" on public.user_achievements;
+create policy "Admins manage all achievement unlocks" on public.user_achievements for all to authenticated using (public.is_admin()) with check (public.is_admin());
+```
+
+The rest of this section is the original policy set, for a from-scratch setup:
+
 ```sql
 -- debots: public read, admin-only write
 create policy "Allow public select" on public.debots for select using (true);
 
 create policy "Admins can insert debots" on public.debots for insert to authenticated
-  with check (exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.is_admin = true));
+  with check (public.is_admin());
 
 create policy "Admins can update debots" on public.debots for update to authenticated
-  using (exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.is_admin = true))
-  with check (exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.is_admin = true));
+  using (public.is_admin()) with check (public.is_admin());
 
 create policy "Admins can delete debots" on public.debots for delete to authenticated
-  using (exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.is_admin = true));
+  using (public.is_admin());
 
 -- app_settings: public read, admin-only write
 create policy "app_settings_select_all" on public.app_settings for select using (true);
 
 create policy "app_settings_write_admin_only" on public.app_settings for all to authenticated
-  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true))
-  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true));
+  using (public.is_admin()) with check (public.is_admin());
 
--- profiles: users can update their own row
+-- profiles: users can update their own row; admins can read every row
+-- (Admin -> Achievements -> Manual Grants player lookup)
 create policy "Users can update own profile" on public.profiles for update to authenticated
   using (auth.uid() = id) with check (auth.uid() = id);
+create policy "Admins can read all profiles" on public.profiles for select to authenticated
+  using (public.is_admin());
 
 -- hidden_topics: users manage their own hidden list
 alter table public.hidden_topics enable row level security;
@@ -104,14 +168,12 @@ create policy "Users manage their own hidden topics" on public.hidden_topics for
 -- store_items: public read, admin-only write
 create policy "store_items_select_all" on public.store_items for select using (true);
 create policy "store_items_write_admin_only" on public.store_items for all to authenticated
-  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true))
-  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true));
+  using (public.is_admin()) with check (public.is_admin());
 
 -- store_themes: public read, admin-only write
 create policy "store_themes_select_all" on public.store_themes for select using (true);
 create policy "store_themes_write_admin_only" on public.store_themes for all to authenticated
-  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true))
-  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true));
+  using (public.is_admin()) with check (public.is_admin());
 
 -- user_themes: users manage their own ownership rows only
 alter table public.user_themes enable row level security;
@@ -121,8 +183,7 @@ create policy "Users manage their own theme unlocks" on public.user_themes for a
 -- achievements: public read, admin-only write
 create policy "achievements_select_all" on public.achievements for select using (true);
 create policy "achievements_write_admin_only" on public.achievements for all to authenticated
-  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true))
-  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true));
+  using (public.is_admin()) with check (public.is_admin());
 
 -- user_achievements: users manage their own unlocks (normal auto-unlock flow) —
 -- AND admins can manage any row (needed for Admin -> Achievements -> Manual
@@ -132,15 +193,7 @@ alter table public.user_achievements enable row level security;
 create policy "Users manage their own achievement unlocks" on public.user_achievements for all to authenticated
   using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "Admins manage all achievement unlocks" on public.user_achievements for all to authenticated
-  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true))
-  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true));
-
--- profiles: admins can look up any player by player_id (Manual Grants search).
--- Add this even if you already have some other profiles select policy —
--- multiple permissive select policies combine with OR, so this only adds
--- access, it can't accidentally take any away.
-create policy "Admins can read all profiles" on public.profiles for select to authenticated
-  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin = true));
+  using (public.is_admin()) with check (public.is_admin());
 ```
 
 ### Achievements migration

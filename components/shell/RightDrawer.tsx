@@ -46,9 +46,6 @@ export function RightDrawer({ onClose }: { onClose: () => void }) {
         <button className="drawer-item" onClick={() => go("/history")}>
           <span style={{ width: 20, textAlign: "center" }}>📜</span> Match History
         </button>
-        <button className="drawer-item" onClick={() => go("/achievements")}>
-          <span style={{ width: 20, textAlign: "center" }}>🏅</span> Achievements
-        </button>
         <button className="drawer-item" onClick={() => go("/settings")}>
           <span style={{ width: 20, textAlign: "center" }}>⚙</span> Settings
         </button>

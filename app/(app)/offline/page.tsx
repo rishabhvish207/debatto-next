@@ -92,6 +92,7 @@ export default function OfflinePage() {
     opps, oppsLoading, unlockDebot,
     inventory, useAceCard, useConfidencePill,
     storeItems,
+    checkAchievements,
     topics, topicsLoading, saveCustomTopic,
     pinnedTopicIds, toggleTopicPin, deleteTopic,
     roundOptions, defaultRounds, requestNavigation, settingsLoaded,
@@ -151,6 +152,20 @@ export default function OfflinePage() {
 
   const textRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Flips true the moment Insight, an Ace Card, or a Confidence Pill is used
+  // in this match — read at match-end for the "Clean Sweep" (win without
+  // using an item) achievement condition. Reset whenever a new battle starts.
+  const usedItemRef = useRef(false);
+  useEffect(() => {
+    if (page === "battle") usedItemRef.current = false;
+  }, [page]);
+
+  // Holds the exact record just written by the SAVE MATCH RESULT effect
+  // below, so the achievement check on "Continue" doesn't have to race
+  // against that write landing in Supabase/localStorage first.
+  const lastMatchRecordRef = useRef<any>(null);
+  const [unlockedToast, setUnlockedToast] = useState<any[]>([]);
+
   // ── SAVE MATCH RESULT ──
   // Fires once, the moment the Result page is reached. Guarded by a ref so
   // re-renders on the same result screen can't write the same match twice.
@@ -168,7 +183,7 @@ export default function OfflinePage() {
     const draw = !won && (pHP <= 0 || oPts > pPts) ? false : pPts === oPts;
     const result = draw ? "draw" : won ? "win" : "loss";
 
-    saveGameData("history", {
+    const matchRecord = {
       id: `match-${Date.now()}`,
       createdAt: new Date().toISOString(),
       debotId: opp.id,
@@ -177,7 +192,11 @@ export default function OfflinePage() {
       playerScore: pPts,
       opponentScore: oPts,
       rounds: history,
-    }, user).then(res => {
+      usedItem: usedItemRef.current,
+    };
+    lastMatchRecordRef.current = matchRecord;
+
+    saveGameData("history", matchRecord, user).then(res => {
       if (!res.ok) {
         console.error(res.error);
         setApiError("Failed to save match history.");
@@ -458,6 +477,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
 
     if (hintData && hintRound === round) { setShowHint(true); return; } // cached — no AI call
 
+    usedItemRef.current = true;
     setPhase("loading"); setLoadMsg("Analysing opponent argument…");
     const sys = `You are a debate coach. Identify logical fallacies and weak points in: "${oppArg}". Return ONLY JSON:
 {"fallacies":[{"type":"name","text":"exact short phrase"}],"weak_points":["phrase1","phrase2"]}`;
@@ -477,6 +497,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
   // for nothing.
   async function getAns() {
     if (phase !== "player-turn" || inventory.aceCards <= 0) return;
+    usedItemRef.current = true;
     setPhase("loading"); setLoadMsg("Generating response options…");
     const sys = `You are an expert debate coach. The player (${curSide}) responds to: "${oppArg}". Topic: "${activeTopic?.text}". Return ONLY JSON:
 {"options":[{"label":"Direct Counter","response":"2-3 sentence response","why":"brief reason"},{"label":"Analytical Attack","response":"2-3 sentence response","why":"brief reason"},{"label":"Reframe","response":"2-3 sentence response","why":"brief reason"}]}`;
@@ -498,6 +519,7 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
     if (phase !== "player-turn") return;
     const ok = await useConfidencePill();
     if (!ok) return;
+    usedItemRef.current = true;
     const item = storeItems.find((i) => i.key === "confidence_pill");
     const healAmount = item?.healAmount ?? GAME_CONFIG.store.confidencePill.healAmount;
     setPHP(hp => clamp(hp + healAmount, 0, 100));
@@ -533,6 +555,21 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
           background: `radial-gradient(circle at 50% 30%, ${bgBlurColor}20 0%, transparent 60%)`,
           filter: "blur(80px)", zIndex: -1, pointerEvents: "none", transition: "background 0.8s ease"
         }} />
+
+        {unlockedToast.length > 0 && (
+          <div className="card anim-pop" style={{ padding: "12px 14px", marginBottom: 16, borderColor: "var(--amber)", background: "var(--amber-soft)" }}>
+            {unlockedToast.map((a) => (
+              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                <span style={{ fontSize: 22 }}>{a.icon}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "var(--amber)" }}>Achievement unlocked: {a.name}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)" }}>{a.description}{a.rewardDebucks ? ` · +${a.rewardDebucks} debucks` : ""}</div>
+                </div>
+              </div>
+            ))}
+            <button className="btn btn-ghost btn-sm" style={{ marginTop: 4 }} onClick={() => setUnlockedToast([])}>Dismiss</button>
+          </div>
+        )}
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24 }}>
           <div style={{ flex: 1 }} />
@@ -994,7 +1031,19 @@ Return ONLY valid JSON. Fill fields in this order so the player evaluation is gr
           })}
         </div>
 
-        <button className="btn btn-primary btn-lg" style={{ width: "100%" }} onClick={() => { if (won) upProfile({ coins: profile.coins + totalReward, wins: profile.wins + 1 }); setPage("setup"); }}>Continue</button>
+        <button
+          className="btn btn-primary btn-lg"
+          style={{ width: "100%" }}
+          onClick={async () => {
+            const finalCoins = won ? profile.coins + totalReward : profile.coins;
+            if (won) upProfile({ coins: finalCoins, wins: profile.wins + 1 });
+            const newly = await checkAchievements({ extraMatch: lastMatchRecordRef.current, baseCoins: finalCoins }).catch(() => []);
+            if (newly.length) setUnlockedToast(newly);
+            setPage("setup");
+          }}
+        >
+          Continue
+        </button>
       </div>
     );
   }

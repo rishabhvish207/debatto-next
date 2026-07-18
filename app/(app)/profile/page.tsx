@@ -5,7 +5,7 @@ import { useGame } from "@/contexts/GameContext";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
 
 export default function ProfilePage() {
-  const { user, profile, upProfile, uploadAvatar, removeAvatar, signOut, signInWithGoogle } = useGame();
+  const { user, profile, upProfile, uploadAvatar, removeAvatar, signOut, signInWithGoogle, achievements, unlockedAchievementIds } = useGame();
 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile?.name || "");
@@ -189,6 +189,18 @@ export default function ProfilePage() {
           </div>
         </div>
       )}
+
+      <a href="/achievements" className="card" style={{ padding: 16, marginTop: 16, display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}>
+        <span style={{ fontSize: 22 }}>🏅</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Achievements</div>
+          <div style={{ fontSize: 11, color: "var(--muted)" }}>
+            {unlockedAchievementIds.length} unlocked
+            {achievements.filter((a) => a.active).length ? ` / ${achievements.filter((a) => a.active).length}` : ""}
+          </div>
+        </div>
+        <span style={{ color: "var(--muted)" }}>›</span>
+      </a>
 
       <div style={{ marginTop: 20 }}>
         {user ? (

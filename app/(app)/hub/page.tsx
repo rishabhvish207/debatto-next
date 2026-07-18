@@ -5,6 +5,7 @@ const CARDS = [
   { href: "/online/random", label: "Online", desc: "Random & friends matches", icon: "🌐", style: "hub-card-primary" },
   { href: "/learning", label: "Learning", desc: "Fallacies & technique", icon: "📚", style: "hub-card-secondary" },
   { href: "/store", label: "Store", desc: "Themes & customization", icon: "🛍", style: "hub-card-secondary" },
+  { href: "/achievements", label: "Achievements", desc: "Track your progress", icon: "🏅", style: "hub-card-secondary" },
 ];
 
 export default function HubPage() {

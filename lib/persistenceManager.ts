@@ -16,7 +16,7 @@ const supabase = createClient();
 
 export type AuthUser = { id: string } | null;
 
-type Domain = "profile" | "debots" | "topics" | "history" | "inventory" | "themes";
+type Domain = "profile" | "debots" | "topics" | "history" | "inventory" | "themes" | "achievements";
 
 const PINNED_TOPICS_LOCAL_KEY = "debatto:pinned_topics"; // string[] of topic ids, guest-only
 const HIDDEN_TOPICS_LOCAL_KEY = "debatto:hidden_topics"; // string[] of system-topic ids this guest has personally removed
@@ -25,9 +25,10 @@ const LOCAL_KEYS: Record<Domain, string> = {
   profile: "debatto:profile",
   debots: "debatto:unlocked_debots",   // string[] of debot ids the guest owns
   topics: "debatto:custom_topics",     // array of custom topic objects
-  history: "debatto:match_history",    // array of { debotId, topicText, result, playerScore, opponentScore, rounds }
+  history: "debatto:match_history",    // array of { debotId, topicText, result, playerScore, opponentScore, rounds, usedItem }
   inventory: "debatto:inventory",      // { insightLens, aceCards, confidencePills } — store items owned
   themes: "debatto:unlocked_themes",   // string[] of store_theme ids the guest owns
+  achievements: "debatto:unlocked_achievements", // string[] of achievement ids the guest has unlocked
 };
 
 
@@ -105,6 +106,8 @@ export async function saveGameData(
       return writeDebotUnlock(user.id, value);
     case "themes":
       return writeThemeUnlock(user.id, value); // value: { themeId: string }
+    case "achievements":
+      return writeAchievementUnlock(user.id, value); // value: { achievementId: string }
     case "topics":
       return writeTopic(user.id, value); // value: { text, cat, ... }
     case "history":
@@ -130,6 +133,8 @@ export async function loadGameData(domain: Domain, user: AuthUser): Promise<Resu
       return readUnlockedDebots(user.id);
     case "themes":
       return readUnlockedThemes(user.id);
+    case "achievements":
+      return readUnlockedAchievements(user.id);
     case "topics":
       return readTopics(user.id);
     case "history":
@@ -149,11 +154,12 @@ export async function syncLocalToDB(user: { id: string }) {
   const cachedProfile = readLocal<any>(LOCAL_KEYS.profile, null);
   const cachedDebotIds = readLocal<string[]>(LOCAL_KEYS.debots, []);
   const cachedThemeIds = readLocal<string[]>(LOCAL_KEYS.themes, []);
+  const cachedAchievementIds = readLocal<string[]>(LOCAL_KEYS.achievements, []);
   const cachedTopics = readLocal<any[]>(LOCAL_KEYS.topics, []);
   const cachedHistory = readLocal<any[]>(LOCAL_KEYS.history, []);
   const cachedInventory = readLocal<any>(LOCAL_KEYS.inventory, null);
 
-  const migrated = { profile: false, debots: 0, themes: 0, topics: 0, matches: 0, inventory: false };
+  const migrated = { profile: false, debots: 0, themes: 0, achievements: 0, topics: 0, matches: 0, inventory: false };
   const errors: any[] = [];
 
   // Guest progress is additive on top of whatever the account already has —
@@ -216,6 +222,16 @@ export async function syncLocalToDB(user: { id: string }) {
     else errors.push(res.error);
   }
 
+  // Achievement unlocks carry over the same way — an unlock earned as a
+  // guest shouldn't be lost the moment they sign in.
+  const achievementResults = await Promise.all(
+    cachedAchievementIds.map((achievementId) => writeAchievementUnlock(user.id, { achievementId }))
+  );
+  for (const res of achievementResults) {
+    if (res.ok) migrated.achievements += 1;
+    else errors.push(res.error);
+  }
+
   const topicResults = await Promise.all(
     cachedTopics.map((topic) => writeTopic(user.id, topic))
   );
@@ -274,6 +290,12 @@ function mergeLocal(domain: Domain, value: any) {
     return existing.includes(id) ? existing : [...existing, id];
   }
 
+  if (domain === "achievements") {
+    // value: { achievementId }
+    const id = value?.achievementId;
+    return existing.includes(id) ? existing : [...existing, id];
+  }
+
   if (domain === "topics") {
     // value: a topic object with a client-generated id
     return [...existing.filter((t: any) => t.id !== value.id), value];
@@ -321,6 +343,28 @@ async function writeThemeUnlock(userId: string, value: { themeId: any }): Promis
     );
   if (error) return { ok: false, source: "db", error };
   return { ok: true, source: "db" };
+}
+
+// Same join-table pattern as user_themes/user_debots — one row per
+// user+achievement, so an unlock never leaks to other accounts.
+async function writeAchievementUnlock(userId: string, value: { achievementId: any }): Promise<Result> {
+  const { error } = await supabase
+    .from("user_achievements")
+    .upsert(
+      { user_id: userId, achievement_id: value.achievementId, unlocked_at: new Date().toISOString() },
+      { onConflict: "user_id,achievement_id" }
+    );
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db" };
+}
+
+async function readUnlockedAchievements(userId: string): Promise<Result> {
+  const { data, error } = await supabase
+    .from("user_achievements")
+    .select("achievement_id")
+    .eq("user_id", userId);
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db", data: (data || []).map((r: any) => r.achievement_id) };
 }
 
 // Store items live in a dedicated `user_inventory` table — one row per
@@ -387,6 +431,7 @@ async function writeMatch(userId: string, match: any): Promise<Result> {
       player_score: match.playerScore,
       opponent_score: match.opponentScore,
       rounds_played: match.rounds?.length ?? 0,
+      used_item: !!match.usedItem,
     })
     .select()
     .single();

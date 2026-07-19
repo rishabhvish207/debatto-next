@@ -3,9 +3,34 @@
 import { useRef, useState } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
+import { displayName, tierColor } from "@/config/Achievements";
 
 export default function ProfilePage() {
   const { user, profile, upProfile, uploadAvatar, removeAvatar, signOut, signInWithGoogle, achievements, unlockedAchievementIds } = useGame();
+
+  // Profile only ever shows the HIGHEST unlocked tier of each achievement
+  // group, not every tier stacked — e.g. clearing Clean Sweep III means the
+  // I/II unlocks that came alongside it don't also show up here separately.
+  const achievementGroupSummary = (() => {
+    const active = achievements.filter((a) => a.active);
+    const groups = new Map<string, typeof active>();
+    for (const a of active) {
+      const key = a.groupKey || `__solo_${a.id}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(a);
+    }
+    let unlockedGroups = 0;
+    const badges: typeof active = [];
+    for (const members of groups.values()) {
+      const sorted = [...members].sort((a, b) => (a.tier ?? 1) - (b.tier ?? 1));
+      let highest: (typeof active)[number] | null = null;
+      for (const m of sorted) {
+        if (unlockedAchievementIds.includes(m.id)) highest = m;
+      }
+      if (highest) { unlockedGroups += 1; badges.push(highest); }
+    }
+    return { unlockedGroups, totalGroups: groups.size, badges: badges.slice(0, 12) };
+  })();
 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile?.name || "");
@@ -190,16 +215,35 @@ export default function ProfilePage() {
         </div>
       )}
 
-      <a href="/achievements" className="card" style={{ padding: 16, marginTop: 16, display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}>
-        <span style={{ fontSize: 22 }}>🏅</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Achievements</div>
-          <div style={{ fontSize: 11, color: "var(--muted)" }}>
-            {unlockedAchievementIds.length} unlocked
-            {achievements.filter((a) => a.active).length ? ` / ${achievements.filter((a) => a.active).length}` : ""}
+      <a href="/achievements" className="card" style={{ padding: 16, marginTop: 16, textDecoration: "none", display: "block" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ fontSize: 22 }}>🏅</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Achievements</div>
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>
+              {achievementGroupSummary.unlockedGroups} unlocked
+              {achievementGroupSummary.totalGroups ? ` / ${achievementGroupSummary.totalGroups}` : ""}
+            </div>
           </div>
+          <span style={{ color: "var(--muted)" }}>›</span>
         </div>
-        <span style={{ color: "var(--muted)" }}>›</span>
+        {achievementGroupSummary.badges.length > 0 && (
+          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            {achievementGroupSummary.badges.map((b) => (
+              <div
+                key={b.id}
+                title={displayName(b)}
+                style={{
+                  width: 34, height: 34, borderRadius: 8,
+                  background: `${tierColor(b.tier)}33`, border: `1.5px solid ${tierColor(b.tier)}`,
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16,
+                }}
+              >
+                {b.icon}
+              </div>
+            ))}
+          </div>
+        )}
       </a>
 
       <div style={{ marginTop: 20 }}>

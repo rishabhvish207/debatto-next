@@ -88,7 +88,7 @@ function getDifficultyGuidance(diff: string) {
 export default function OfflinePage() {
   const {
     user,
-    profile, upProfile,
+    profile, upProfile, earnCoins,
     battleActive, setBattleActive,
     opps, oppsLoading, unlockDebot,
     inventory, useAceCard, useConfidencePill, useRevivalShot,
@@ -1053,8 +1053,8 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
           style={{ width: "100%" }}
           onClick={async () => {
             const finalCoins = won ? profile.coins + totalReward : profile.coins;
-            if (won) upProfile({ coins: finalCoins, wins: profile.wins + 1 });
-            await checkAchievements({ extraMatch: lastMatchRecordRef.current, baseCoins: finalCoins }).catch(() => []);
+            if (won) earnCoins(totalReward, { wins: profile.wins + 1 });
+            await checkAchievements({ extraMatch: lastMatchRecordRef.current, baseCoins: finalCoins, lifetimeEarnedDelta: totalReward }).catch(() => []);
             setPage("setup");
           }}
         >

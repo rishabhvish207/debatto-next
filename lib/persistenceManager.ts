@@ -178,8 +178,24 @@ export async function syncLocalToDB(user: { id: string }) {
     // starting default represents something they actually earned in that
     // browser as a guest — that's the only part that should move over.
     const guestEarned = Math.max(0, cachedProfile.coins - GAME_CONFIG.economy.startingCoins);
-    if (guestEarned > 0) {
-      const res = await writeProfile(user.id, { coins: existingCoins + guestEarned });
+
+    // Lifetime totals are already cumulative-only by construction (see
+    // GameContext's earnCoins/spendCoins), so the guest's whole cached
+    // figure — not just the portion above a starting value — is what
+    // actually happened in this browser, and adds straight onto whatever
+    // the account already has.
+    const existingEarned = (existing.ok && typeof existing.data?.lifetime_debucks_earned === "number") ? existing.data.lifetime_debucks_earned : 0;
+    const existingSpent = (existing.ok && typeof existing.data?.lifetime_debucks_spent === "number") ? existing.data.lifetime_debucks_spent : 0;
+    const guestLifetimeEarned = typeof cachedProfile.lifetimeDebucksEarned === "number" ? cachedProfile.lifetimeDebucksEarned : 0;
+    const guestLifetimeSpent = typeof cachedProfile.lifetimeDebucksSpent === "number" ? cachedProfile.lifetimeDebucksSpent : 0;
+
+    const patch: Record<string, any> = {};
+    if (guestEarned > 0) patch.coins = existingCoins + guestEarned;
+    if (guestLifetimeEarned > 0) patch.lifetimeDebucksEarned = existingEarned + guestLifetimeEarned;
+    if (guestLifetimeSpent > 0) patch.lifetimeDebucksSpent = existingSpent + guestLifetimeSpent;
+
+    if (Object.keys(patch).length) {
+      const res = await writeProfile(user.id, patch);
       if (res.ok) migrated.profile = true;
       else errors.push(res.error);
     }
@@ -191,11 +207,12 @@ export async function syncLocalToDB(user: { id: string }) {
     // insightLens in particular is supposed to be permanent, so overwriting
     // it with `false` on a new-device login would silently take it away.
     const existingInv = await readInventory(user.id);
-    const base = (existingInv.ok && existingInv.data) ? existingInv.data : { insightLens: false, aceCards: 0, confidencePills: 0 };
+    const base = (existingInv.ok && existingInv.data) ? existingInv.data : { insightLens: false, aceCards: 0, confidencePills: 0, revivalShots: 0 };
     const patch: Record<string, any> = {};
     if (typeof cachedInventory.insightLens === "boolean") patch.insightLens = base.insightLens || cachedInventory.insightLens;
     if (typeof cachedInventory.aceCards === "number") patch.aceCards = base.aceCards + cachedInventory.aceCards;
     if (typeof cachedInventory.confidencePills === "number") patch.confidencePills = base.confidencePills + cachedInventory.confidencePills;
+    if (typeof cachedInventory.revivalShots === "number") patch.revivalShots = (base.revivalShots || 0) + cachedInventory.revivalShots;
     if (Object.keys(patch).length) {
       const res = await writeInventory(user.id, patch);
       if (res.ok) migrated.inventory = true;
@@ -314,7 +331,21 @@ function mergeLocal(domain: Domain, value: any) {
 // ---------------------------------------------------------------------------
 
 async function writeProfile(userId: string, patch: Record<string, any>): Promise<Result> {
-  const { error } = await supabase.from("profiles").update(patch).eq("id", userId);
+  // Every other profile field's JS key already matches its DB column name
+  // 1:1 (coins, wins, name, bio, avatar_url, equipped_theme_id) — these two
+  // are the only camelCase multi-word exception, so they need translating
+  // before hitting Postgres or the update would silently target columns
+  // that don't exist.
+  const dbPatch: Record<string, any> = { ...patch };
+  if ("lifetimeDebucksEarned" in dbPatch) {
+    dbPatch.lifetime_debucks_earned = dbPatch.lifetimeDebucksEarned;
+    delete dbPatch.lifetimeDebucksEarned;
+  }
+  if ("lifetimeDebucksSpent" in dbPatch) {
+    dbPatch.lifetime_debucks_spent = dbPatch.lifetimeDebucksSpent;
+    delete dbPatch.lifetimeDebucksSpent;
+  }
+  const { error } = await supabase.from("profiles").update(dbPatch).eq("id", userId);
   if (error) return { ok: false, source: "db", error };
   return { ok: true, source: "db" };
 }

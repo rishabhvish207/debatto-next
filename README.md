@@ -56,7 +56,7 @@ The app expects specific tables, columns, and **Row Level Security policies** in
 
 ### Core tables
 
-- `profiles` — one row per user: `name`, `coins`, `wins`, `is_admin`, `bio`, `avatar_url`, `player_id` (see below), `prestige`
+- `profiles` — one row per user: `name`, `coins`, `wins`, `is_admin`, `bio`, `avatar_url`, `player_id` (see below), `prestige`, `lifetime_debucks_earned`/`lifetime_debucks_spent` (cumulative, never decrease — used by the tiered "Debucks Earned"/"Big Spender" achievements; kept separate from `coins`, which is a spendable balance. The admin debucks cheat deliberately does not add to `lifetime_debucks_earned`.)
 - `debots` — the AI opponent catalog: `name`, `sub`, `personality`, `depth`, `story`, `arg_sentences`, `sprite_url`, `sprite_emotions` (jsonb), `multiplier` (its own attack-damage multiplier against the player), `cost`, `max_hp`, `color`, `diff` (difficulty label — read by the AI to scale how hard/easy it argues and how strictly it grades you), `dc`, `reward`, `vertices` (per-debot shape fallback; overridden globally if `app_settings.debot_vertices` is set)
 - `user_debots` — join table for per-user unlocks: `user_id`, `debot_id`, `unlocked_at`. Unlocks live here rather than as a column on `debots` itself, since a debot getting unlocked for one user must not unlock it globally for everyone.
 - `user_inventory` — one row per user for Store items: `user_id` (unique), `insight_lens` (bool, permanent), `ace_cards` (int, stackable), `confidence_pills` (int, stackable). Upserted on every purchase/use.
@@ -391,6 +391,49 @@ create policy "Admins can upload site assets" on storage.objects for insert to a
   with check (bucket_id = 'site-assets' and exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.is_admin = true));
 create policy "Admins can update site assets" on storage.objects for update to authenticated
   using (bucket_id = 'site-assets' and exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.is_admin = true));
+```
+
+### Tiered achievements & lifetime debucks migration
+
+Achievements can now optionally belong to a tiered family (`group_key` + `tier` columns) — e.g. four rows all with
+`group_key = 'clean_sweep'` and `tier` 1–4. Clearing a higher tier automatically grants every lower tier in the same
+group too. Display name is always "`<name>` `<ROMAN NUMERAL>`" for a tiered achievement, derived from `tier` — see
+`displayName()` in `config/Achievements.ts`. New condition types: `no_item_win_difficulty` (win without an item vs.
+any debot of a given difficulty — the usual way to build a tiered family), `total_debucks_earned`/
+`total_debucks_spent` (lifetime, not current balance), `all_debots_unlocked`, `themes_owned`.
+
+```sql
+alter table public.achievements add column if not exists group_key text;
+alter table public.achievements add column if not exists tier integer;
+
+alter table public.profiles add column if not exists lifetime_debucks_earned numeric not null default 0;
+alter table public.profiles add column if not exists lifetime_debucks_spent numeric not null default 0;
+
+-- Repurposes the existing flat "Clean Sweep" achievement as tier 1 (Beginner)
+-- of the new tiered family, so anyone who already earned it keeps it.
+update public.achievements
+set group_key = 'clean_sweep', tier = 1,
+    condition_type = 'no_item_win_difficulty',
+    condition_config = '{"difficulty":"beginner"}',
+    description = 'Win a match against a Beginner debot without using any item.',
+    reward_debucks = 15
+where key = 'clean_sweep';
+
+insert into public.achievements (key, name, icon, description, condition_type, condition_config, reward_debucks, group_key, tier, sort_order)
+values
+  ('clean_sweep_intermediate', 'Clean Sweep', '🧠', 'Win a match against an Intermediate debot without using any item.', 'no_item_win_difficulty', '{"difficulty":"intermediate"}', 30, 'clean_sweep', 2, 3),
+  ('clean_sweep_advanced', 'Clean Sweep', '🧠', 'Win a match against an Advanced debot without using any item.', 'no_item_win_difficulty', '{"difficulty":"advanced"}', 45, 'clean_sweep', 3, 4),
+  ('clean_sweep_expert', 'Clean Sweep', '🧠', 'Win a match against a Master debot without using any item.', 'no_item_win_difficulty', '{"difficulty":"expert"}', 60, 'clean_sweep', 4, 5),
+  ('debucks_earned_1', 'Debucks Earned', '💰', 'Earn 100 debucks in total.', 'total_debucks_earned', '{"count":100}', 10, 'debucks_earned', 1, 20),
+  ('debucks_earned_2', 'Debucks Earned', '💰', 'Earn 500 debucks in total.', 'total_debucks_earned', '{"count":500}', 25, 'debucks_earned', 2, 21),
+  ('debucks_earned_3', 'Debucks Earned', '💰', 'Earn 2000 debucks in total.', 'total_debucks_earned', '{"count":2000}', 60, 'debucks_earned', 3, 22),
+  ('debucks_earned_4', 'Debucks Earned', '💰', 'Earn 10000 debucks in total.', 'total_debucks_earned', '{"count":10000}', 150, 'debucks_earned', 4, 23),
+  ('big_spender_1', 'Big Spender', '🛍', 'Spend 100 debucks in the Store in total.', 'total_debucks_spent', '{"count":100}', 5, 'big_spender', 1, 30),
+  ('big_spender_2', 'Big Spender', '🛍', 'Spend 500 debucks in the Store in total.', 'total_debucks_spent', '{"count":500}', 15, 'big_spender', 2, 31),
+  ('big_spender_3', 'Big Spender', '🛍', 'Spend 2000 debucks in the Store in total.', 'total_debucks_spent', '{"count":2000}', 40, 'big_spender', 3, 32),
+  ('collector', 'Collector', '🗂', 'Unlock every debot in the roster.', 'all_debots_unlocked', '{}', 75, null, null, 40),
+  ('first_theme', 'New Look', '🎨', 'Buy your first theme.', 'themes_owned', '{"count":1}', 10, null, null, 41)
+on conflict (key) do nothing;
 ```
 
 ### Player ID

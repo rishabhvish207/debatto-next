@@ -67,6 +67,7 @@ export default function AchievementsPage() {
       case "total_debucks_spent": return `Spend ${cfg.count || 1} debucks in total`;
       case "all_debots_unlocked": return "Unlock every debot";
       case "themes_owned": return (cfg.count || 1) <= 1 ? "Buy your first theme" : `Own ${cfg.count} themes`;
+      case "daily_challenges_completed": return `Complete ${cfg.count || 1} Daily Challenges in total`;
       case "manual": return "Granted by an admin";
       default: return "";
     }

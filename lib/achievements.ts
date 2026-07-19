@@ -59,6 +59,7 @@ export type AchievementEvalContext = {
   unlockedDebotIds: string[];
   totalActiveDebotCount: number;
   ownedThemeCount: number;
+  dailyChallengesCompleted: number;
 };
 
 function conditionMet(a: AchievementDef, ctx: AchievementEvalContext): boolean {
@@ -125,6 +126,10 @@ function conditionMet(a: AchievementDef, ctx: AchievementEvalContext): boolean {
     case "themes_owned": {
       const need = Number(cfg.count) || 1;
       return ctx.ownedThemeCount >= need;
+    }
+    case "daily_challenges_completed": {
+      const need = Number(cfg.count) || 1;
+      return ctx.dailyChallengesCompleted >= need;
     }
     case "manual":
     default:

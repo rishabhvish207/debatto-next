@@ -36,6 +36,7 @@ export type AchievementConditionType =
   | "total_debucks_spent"    // config: { count }                          — lifetime debucks spent in the Store
   | "all_debots_unlocked"    // config: {}                                 — own every debot in the catalog
   | "themes_owned"           // config: { count }                          — own at least this many themes (count:1 = "buy your first theme")
+  | "daily_challenges_completed" // config: { count }                      — total Daily Challenges ever completed (not necessarily consecutive)
   | "manual";                // config: {}                                 — never auto-unlocked; admin grants by hand
 
 export const CONDITION_TYPE_META: Record<AchievementConditionType, { label: string; needsCount?: boolean; needsDebot?: boolean; needsItemKey?: boolean; needsDifficulty?: boolean; hint: string }> = {
@@ -50,6 +51,7 @@ export const CONDITION_TYPE_META: Record<AchievementConditionType, { label: stri
   total_debucks_spent: { label: "Lifetime debucks spent", needsCount: true, hint: "Unlocks once this many debucks have been spent in the Store in total." },
   all_debots_unlocked: { label: "Own every debot", hint: "Unlocks the moment every debot in the catalog is unlocked." },
   themes_owned: { label: "Own N themes", needsCount: true, hint: "Unlocks once this many themes are owned. Use count: 1 for a 'buy your first theme' achievement." },
+  daily_challenges_completed: { label: "Daily Challenges completed", needsCount: true, hint: "Unlocks after completing this many Daily Challenges in total — days don't need to be consecutive." },
   manual: { label: "Manual (admin-granted only)", hint: "Never unlocks automatically — grant it to a specific player from Admin → Achievements → Manual Grants." },
 };
 
@@ -275,4 +277,25 @@ export const DEFAULT_ACHIEVEMENTS: AchievementDef[] = [
     groupKey: null,
     tier: null,
   },
+  // Daily Devotee — tiered, total Daily Challenges completed (not streak).
+  ...[
+    { count: 10, reward: 15 },
+    { count: 30, reward: 40 },
+    { count: 50, reward: 75 },
+    { count: 100, reward: 150 },
+  ].map((t, i) => ({
+    id: `default-daily-devotee-${i + 1}`,
+    key: `daily_devotee_${i + 1}`,
+    name: "Daily Devotee",
+    description: `Complete ${t.count} Daily Challenges in total.`,
+    icon: "📅",
+    conditionType: "daily_challenges_completed" as const,
+    conditionConfig: { count: t.count },
+    rewardDebucks: t.reward,
+    rewardThemeId: null,
+    active: true,
+    sortOrder: 50 + i,
+    groupKey: "daily_devotee",
+    tier: i + 1,
+  })),
 ];

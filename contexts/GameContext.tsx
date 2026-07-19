@@ -22,6 +22,7 @@ import { DEFAULT_THEMES, StoreTheme } from "@/config/Themes";
 import { DEFAULT_ACHIEVEMENTS, AchievementDef } from "@/config/Achievements";
 import { getNewlyUnlocked, normalizeMatch } from "@/lib/achievements";
 import { DEFAULT_JUDGE_SETTINGS, JudgeSettings } from "@/config/Judge";
+import { DEFAULT_REWARD_PER_CORRECT } from "@/config/DailyChallenge";
 
 const supabase = createClient();
 const DEFAULT_NAME = GAME_CONFIG.defaultName;
@@ -107,6 +108,7 @@ type GameContextValue = {
     ownedThemeCountOverride?: number;
     lifetimeEarnedDelta?: number;
     lifetimeSpentDelta?: number;
+    dailyChallengesCompletedOverride?: number;
   }) => Promise<AchievementDef[]>;
   pendingAchievementPopups: AchievementDef[];
   dismissAchievementPopup: () => void;
@@ -125,6 +127,7 @@ type GameContextValue = {
   diffBadgeStyle: "badge" | "plain";
   cheatTapEnabled: boolean;
   siteBg: { url: string | null; opacity: number; applyEverywhere: boolean };
+  dailyChallengeRewardPerCorrect: number;
   refetchSettings: () => Promise<void>;
   judgeSettings: JudgeSettings;
   judgeSettingsLoading: boolean;
@@ -135,6 +138,8 @@ type GameContextValue = {
   cancelNavigation: () => void;
 
   battleActive: boolean;
+  navGuardMessage: { title: string; message: string };
+  setNavGuardMessage: (m: { title: string; message: string }) => void;
   setBattleActive: (active: boolean) => void;
 
   apiError: string;
@@ -173,6 +178,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [diffBadgeStyle, setDiffBadgeStyle] = useState<"badge" | "plain">("badge");
   const [cheatTapEnabled, setCheatTapEnabled] = useState<boolean>(true);
   const [siteBg, setSiteBg] = useState<{ url: string | null; opacity: number; applyEverywhere: boolean }>({ url: null, opacity: 0.16, applyEverywhere: false });
+  const [dailyChallengeRewardPerCorrect, setDailyChallengeRewardPerCorrect] = useState(DEFAULT_REWARD_PER_CORRECT);
   const [pendingNavAction, setPendingNavAction] = useState<(() => void) | null>(null);
 
   // Any navigation that might leave an in-progress match (drawer links, the
@@ -198,6 +204,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   const [apiError, setApiError] = useState("");
   const [battleActive, setBattleActive] = useState(false);
+  // battleActive's confirmation dialog defaults to match wording — the
+  // Daily Challenge (app/(app)/learning/page.tsx) overrides this while
+  // it's in progress, then it's fine to leave it as whatever it last was.
+  const [navGuardMessage, setNavGuardMessage] = useState({
+    title: "Exit this match?",
+    message: "Leaving now will end the debate and lose your progress in this round.",
+  });
 
   const savingTopicRef = useRef(false);
 
@@ -886,6 +899,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     ownedThemeCountOverride?: number;
     lifetimeEarnedDelta?: number;
     lifetimeSpentDelta?: number;
+    dailyChallengesCompletedOverride?: number;
   } = {}): Promise<AchievementDef[]> {
     const historyRes = await loadGameData("history", user);
     let rawHistory: any[] = historyRes.ok && Array.isArray(historyRes.data) ? historyRes.data : [];
@@ -907,6 +921,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       unlockedDebotIds: opts.unlockedDebotIdsOverride ?? opps.filter((o) => o.unlocked).map((o) => o.id),
       totalActiveDebotCount: opps.length,
       ownedThemeCount: opts.ownedThemeCountOverride ?? allOwnedThemeIds.length,
+      dailyChallengesCompleted: opts.dailyChallengesCompletedOverride ?? 0,
     });
     if (newly.length === 0) return [];
 
@@ -981,7 +996,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debot_diff_badge_style", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere"]);
+      .in("key", ["rounds_options", "rounds_default", "debot_vertices", "debot_diff_badge_style", "debucks_cheat_enabled", "landing_bg_url", "landing_bg_opacity", "bg_apply_everywhere", "daily_challenge_reward_per_correct"]);
 
     if (error || !data) {
       // DB fetch failed — fall back to config so the UI has *something*
@@ -1006,6 +1021,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       opacity: typeof map.landing_bg_opacity === "number" ? map.landing_bg_opacity : 0.16,
       applyEverywhere: map.bg_apply_everywhere === true,
     });
+    setDailyChallengeRewardPerCorrect(typeof map.daily_challenge_reward_per_correct === "number" ? map.daily_challenge_reward_per_correct : DEFAULT_REWARD_PER_CORRECT);
     setSettingsLoaded(true);
   };
 
@@ -1207,6 +1223,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         diffBadgeStyle,
         cheatTapEnabled,
         siteBg,
+        dailyChallengeRewardPerCorrect,
         refetchSettings: fetchGameSettings,
         judgeSettings,
         judgeSettingsLoading,
@@ -1216,6 +1233,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         confirmNavigation,
         cancelNavigation,
         battleActive,
+        navGuardMessage,
+        setNavGuardMessage,
         setBattleActive,
         apiError,
         setApiError,

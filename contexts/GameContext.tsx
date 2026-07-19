@@ -99,7 +99,15 @@ type GameContextValue = {
   achievementsLoading: boolean;
   unlockedAchievementIds: string[];
   refetchAchievements: () => Promise<void>;
-  checkAchievements: (opts?: { extraMatch?: any; baseCoins?: number }) => Promise<AchievementDef[]>;
+  checkAchievements: (opts?: {
+    extraMatch?: any;
+    baseCoins?: number;
+    inventoryOverride?: Partial<Inventory>;
+    unlockedDebotIdsOverride?: string[];
+    ownedThemeCountOverride?: number;
+    lifetimeEarnedDelta?: number;
+    lifetimeSpentDelta?: number;
+  }) => Promise<AchievementDef[]>;
   pendingAchievementPopups: AchievementDef[];
   dismissAchievementPopup: () => void;
 

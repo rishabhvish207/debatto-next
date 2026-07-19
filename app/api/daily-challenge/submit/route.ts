@@ -2,20 +2,22 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { DailyChallengeQuestion, DEFAULT_REWARD_PER_CORRECT } from "@/config/DailyChallenge";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { autoRefreshToken: false, persistSession: false } }
-);
-
-const supabasePublic = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// See app/api/daily-challenge/route.ts for why these are created lazily
+// inside the handler rather than at module load time.
+function getAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+}
+function getPublicClient() {
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+}
 
 async function getRewardPerCorrect(): Promise<number> {
   try {
-    const { data } = await supabasePublic.from("app_settings").select("value").eq("key", "daily_challenge_reward_per_correct").maybeSingle();
+    const { data } = await getPublicClient().from("app_settings").select("value").eq("key", "daily_challenge_reward_per_correct").maybeSingle();
     return typeof data?.value === "number" ? data.value : DEFAULT_REWARD_PER_CORRECT;
   } catch {
     return DEFAULT_REWARD_PER_CORRECT;
@@ -29,6 +31,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Malformed submission." }, { status: 400 });
     }
 
+    const supabaseAdmin = getAdminClient();
     const { data: challenge } = await supabaseAdmin
       .from("daily_challenges")
       .select("id, questions")

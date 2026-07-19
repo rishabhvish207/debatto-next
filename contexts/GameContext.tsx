@@ -800,7 +800,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
       setOwnedThemeIds((prev) => (prev.includes(themeId) ? prev : [...prev, themeId]));
       spendCoins(theme.cost);
-      checkAchievements({ baseCoins: profile.coins - theme.cost, ownedThemeCountOverride: allOwnedThemeIds.length + 1, lifetimeSpentDelta: theme.cost }).catch(() => {});
+      checkAchievements({ baseCoins: profile.coins - theme.cost, ownedThemeCountOverride: ownedThemeIds.length + 1, lifetimeSpentDelta: theme.cost }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase theme. Please try again.");
@@ -920,7 +920,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
       lifetimeDebucksSpent: (profile.lifetimeDebucksSpent || 0) + (opts.lifetimeSpentDelta || 0),
       unlockedDebotIds: opts.unlockedDebotIdsOverride ?? opps.filter((o) => o.unlocked).map((o) => o.id),
       totalActiveDebotCount: opps.length,
-      ownedThemeCount: opts.ownedThemeCountOverride ?? allOwnedThemeIds.length,
+      // Deliberately ownedThemeIds, NOT allOwnedThemeIds — the latter also
+      // includes every free/default theme, which everyone "owns" from the
+      // moment they open the app. Using it here meant "buy your first
+      // theme" was satisfied for every player on their very first
+      // achievement check of any kind (buying an item, winning a match —
+      // anything), without ever actually buying a theme.
+      ownedThemeCount: opts.ownedThemeCountOverride ?? ownedThemeIds.length,
       dailyChallengesCompleted: opts.dailyChallengesCompletedOverride ?? 0,
     });
     if (newly.length === 0) return [];

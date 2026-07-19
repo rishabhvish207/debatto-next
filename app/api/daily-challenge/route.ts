@@ -10,18 +10,23 @@ import { QUESTION_GEN_SYSTEM_PROMPT, FALLBACK_QUESTIONS, DailyChallengeQuestion 
 // permitted SELECT; the only clean way to guarantee that is a table with NO
 // client-facing SELECT policy at all, read here with a key that bypasses
 // RLS entirely. Requires SUPABASE_SERVICE_ROLE_KEY in your env — see README.
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  { auth: { autoRefreshToken: false, persistSession: false } }
-);
-
-// Anon-key client, just for reading the AI model settings (public data,
-// same pattern as app/api/debate/route.ts).
-const supabasePublic = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+//
+// Both clients are created lazily, inside the request handler, rather than
+// at module load time — Next.js evaluates route modules during its build
+// step (collecting page data) even before any request comes in, so a
+// missing env var in a top-level createClient() call fails the *entire
+// build*, not just requests to this route. Creating them inside GET()
+// means a missing var only 500s that one request at runtime instead.
+function getAdminClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+}
+function getPublicClient() {
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+}
 
 function todayUTC(): string {
   return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
@@ -46,7 +51,7 @@ function validateQuestions(parsed: any): DailyChallengeQuestion[] | null {
 async function getAiSettings() {
   const FALLBACK = { model: AI_CONFIG.model, maxTokens: AI_CONFIG.maxTokens, temperature: AI_CONFIG.temperature };
   try {
-    const { data } = await supabasePublic.from("app_settings").select("key, value").in("key", ["ai_model", "ai_max_tokens"]);
+    const { data } = await getPublicClient().from("app_settings").select("key, value").in("key", ["ai_model", "ai_max_tokens"]);
     const map: Record<string, any> = {};
     for (const row of data || []) map[row.key] = row.value;
     return {
@@ -91,6 +96,7 @@ async function generateQuestions(): Promise<DailyChallengeQuestion[]> {
 export async function GET() {
   try {
     const date = todayUTC();
+    const supabaseAdmin = getAdminClient();
 
     const { data: existing } = await supabaseAdmin
       .from("daily_challenges")

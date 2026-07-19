@@ -1470,7 +1470,7 @@ function AchievementsCatalogAdmin() {
         <div style={{ marginTop: 14, padding: 10, background: "var(--faint)", borderRadius: 8 }}>
           <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
             Optional — put several achievements in the same group to make them a tiered family (e.g. "Clean Sweep" tiers
-            I–IV). The display name becomes "<name> &lt;roman numeral&gt;" automatically. Clearing a higher tier also
+            I–IV). The display name becomes "name + roman numeral" automatically. Clearing a higher tier also
             grants every lower tier in the same group.
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8 }}>

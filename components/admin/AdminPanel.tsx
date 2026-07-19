@@ -15,7 +15,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useGame } from "@/contexts/GameContext";
 import { callAI } from "@/lib/ai";
 import { DEFAULT_THEMES, FONT_PRESETS } from "@/config/Themes";
-import { CONDITION_TYPE_META, AchievementConditionType } from "@/config/Achievements";
+import { CONDITION_TYPE_META, AchievementConditionType, displayName } from "@/config/Achievements";
 import { DEFAULT_JUDGE_SETTINGS } from "@/config/Judge";
 
 const supabase = createClient();
@@ -1260,6 +1260,8 @@ const BLANK_ACHIEVEMENT = {
   reward_debucks: 10,
   reward_theme_id: null as string | null,
   active: true,
+  group_key: null as string | null,
+  tier: null as number | null,
 };
 
 function AchievementsAdmin() {
@@ -1330,7 +1332,9 @@ function AchievementsCatalogAdmin() {
       config.debotId = editing.condition_config.debotId;
     }
     if (meta?.needsItemKey) config.itemKey = editing.condition_config?.itemKey || "ace_card";
+    if (meta?.needsDifficulty) config.difficulty = editing.condition_config?.difficulty || "beginner";
 
+    const groupKey = editing.group_key?.trim() || null;
     setStatus("Saving…");
     const payload = {
       key: editing.key.trim(),
@@ -1342,6 +1346,8 @@ function AchievementsCatalogAdmin() {
       reward_debucks: Number(editing.reward_debucks) || 0,
       reward_theme_id: editing.reward_theme_id || null,
       active: !!editing.active,
+      group_key: groupKey,
+      tier: groupKey ? (Number(editing.tier) || 1) : null,
     };
     const res = editing.id
       ? await supabase.from("achievements").update(payload).eq("id", editing.id).select()
@@ -1428,6 +1434,22 @@ function AchievementsCatalogAdmin() {
             </select>
           </div>
         )}
+        {meta?.needsDifficulty && (
+          <div style={{ marginTop: 10 }}>
+            <label style={{ display: "block", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>Difficulty tier</label>
+            <select
+              className="input-field"
+              value={editing.condition_config?.difficulty || "beginner"}
+              onChange={(e) => updateConfig("difficulty", e.target.value)}
+              style={{ width: "100%" }}
+            >
+              <option value="beginner">Beginner</option>
+              <option value="intermediate">Intermediate</option>
+              <option value="advanced">Advanced</option>
+              <option value="expert">Expert / Master</option>
+            </select>
+          </div>
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
           <LabeledInput label="Reward (debucks)" value={editing.reward_debucks} onChange={(v) => updateField("reward_debucks", v)} type="number" />
@@ -1442,6 +1464,20 @@ function AchievementsCatalogAdmin() {
               <option value="">— None —</option>
               {themes.map((t: any) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14, padding: 10, background: "var(--faint)", borderRadius: 8 }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8, lineHeight: 1.5 }}>
+            Optional — put several achievements in the same group to make them a tiered family (e.g. "Clean Sweep" tiers
+            I–IV). The display name becomes "name + roman numeral" automatically. Clearing a higher tier also
+            grants every lower tier in the same group.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8 }}>
+            <LabeledInput label="Group key (blank = standalone)" value={editing.group_key || ""} onChange={(v) => updateField("group_key", v)} />
+            {editing.group_key?.trim() && (
+              <LabeledInput label="Tier (1 = easiest)" value={editing.tier ?? 1} onChange={(v) => updateField("tier", v)} type="number" min={1} />
+            )}
           </div>
         </div>
 
@@ -1474,7 +1510,12 @@ function AchievementsCatalogAdmin() {
               <span {...reorder.handleProps(i)}>⠿</span>
               <span style={{ fontSize: 18 }}>{a.icon}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {displayName(a as any)}
+                  {a.group_key && (
+                    <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 400, marginLeft: 6 }}>({a.group_key})</span>
+                  )}
+                </div>
                 <div style={{ fontSize: 11, color: "var(--muted)" }}>
                   <code>{a.key}</code> · {CONDITION_TYPE_META[a.condition_type as AchievementConditionType]?.label || a.condition_type}
                   {a.reward_debucks ? ` · +${a.reward_debucks} debucks` : ""}

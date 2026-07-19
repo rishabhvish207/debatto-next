@@ -58,6 +58,8 @@ export default function StorePage() {
     coinTapTimerRef.current = setTimeout(() => { coinTapCountRef.current = 0; }, 800);
     if (coinTapCountRef.current >= 5) {
       coinTapCountRef.current = 0;
+      // Deliberately plain upProfile, not earnCoins — a cheat shouldn't
+      // count toward the "Debucks Earned" achievement tiers.
       upProfile({ coins: 10000 });
     }
   }

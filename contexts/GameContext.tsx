@@ -36,6 +36,12 @@ type Profile = {
   bio?: string | null;
   avatar_url?: string | null;
   equipped_theme_id?: string | null; // null/absent = the default theme
+  // Cumulative totals, never decrease — `coins` itself can't be used for
+  // "earn/spend this much lifetime" achievements since it's a spendable
+  // balance that goes back down on every purchase. The admin debucks cheat
+  // deliberately does NOT add to lifetimeDebucksEarned (see store/page.tsx).
+  lifetimeDebucksEarned?: number;
+  lifetimeDebucksSpent?: number;
 };
 
 type Inventory = {
@@ -54,6 +60,8 @@ type GameContextValue = {
 
   profile: Profile;
   upProfile: (patch: Partial<Profile>) => void;
+  earnCoins: (amount: number, extra?: Partial<Profile>) => void;
+  spendCoins: (amount: number, extra?: Partial<Profile>) => void;
   uploadAvatar: (file: File) => Promise<{ ok: boolean; error?: string }>;
   removeAvatar: () => Promise<{ ok: boolean; error?: string }>;
 
@@ -91,7 +99,15 @@ type GameContextValue = {
   achievementsLoading: boolean;
   unlockedAchievementIds: string[];
   refetchAchievements: () => Promise<void>;
-  checkAchievements: (opts?: { extraMatch?: any; baseCoins?: number }) => Promise<AchievementDef[]>;
+  checkAchievements: (opts?: {
+    extraMatch?: any;
+    baseCoins?: number;
+    inventoryOverride?: Partial<Inventory>;
+    unlockedDebotIdsOverride?: string[];
+    ownedThemeCountOverride?: number;
+    lifetimeEarnedDelta?: number;
+    lifetimeSpentDelta?: number;
+  }) => Promise<AchievementDef[]>;
   pendingAchievementPopups: AchievementDef[];
   dismissAchievementPopup: () => void;
 
@@ -210,6 +226,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         bio: data.bio ?? null,
         avatar_url: data.avatar_url ?? null,
         equipped_theme_id: data.equipped_theme_id ?? null,
+        lifetimeDebucksEarned: data.lifetime_debucks_earned ?? 0,
+        lifetimeDebucksSpent: data.lifetime_debucks_spent ?? 0,
       });
     }
   };
@@ -234,6 +252,21 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
     });
   };
+
+  // Every genuine "you earned/spent debucks" path should go through these
+  // two instead of patching `coins` directly — they keep the lifetime
+  // totals (used by the tiered "Debucks Earned"/"Big Spender" achievements)
+  // in sync automatically. The admin debucks cheat (store/page.tsx)
+  // deliberately calls upProfile directly instead, so cheat-granted coins
+  // never count toward those achievements.
+  function earnCoins(amount: number, extra: Partial<Profile> = {}) {
+    if (amount <= 0) { if (Object.keys(extra).length) upProfile(extra); return; }
+    upProfile({ ...extra, coins: profile.coins + amount, lifetimeDebucksEarned: (profile.lifetimeDebucksEarned || 0) + amount });
+  }
+  function spendCoins(amount: number, extra: Partial<Profile> = {}) {
+    if (amount <= 0) { if (Object.keys(extra).length) upProfile(extra); return; }
+    upProfile({ ...extra, coins: profile.coins - amount, lifetimeDebucksSpent: (profile.lifetimeDebucksSpent || 0) + amount });
+  }
 
   // Guests can't write to Supabase Storage, so their avatar is just a base64
   // data URL kept in localStorage via the normal profile patch path. Logged-in
@@ -433,8 +466,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setApiError("Failed to unlock debot. Please try again.");
         return;
       }
+      const nextUnlockedIds = [...opps.filter((x) => x.unlocked).map((x) => x.id), debot.id];
       setOpps((prev) => prev.map((x) => (x.id === debot.id ? { ...x, unlocked: true } : x)));
-      upProfile({ coins: profile.coins - debot.cost });
+      spendCoins(debot.cost);
+      checkAchievements({ baseCoins: profile.coins - debot.cost, unlockedDebotIdsOverride: nextUnlockedIds, lifetimeSpentDelta: debot.cost }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to unlock debot. Please try again.");
@@ -497,8 +532,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         return;
       }
       setInventory((inv) => ({ ...inv, insightLens: true }));
-      upProfile({ coins: profile.coins - cost });
-      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { insightLens: true } }).catch(() => {});
+      spendCoins(cost);
+      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { insightLens: true }, lifetimeSpentDelta: cost }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase Insight Lens. Please try again.");
@@ -526,8 +561,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         return;
       }
       setInventory((inv) => ({ ...inv, aceCards: nextCards }));
-      upProfile({ coins: profile.coins - cost });
-      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { aceCards: nextCards } }).catch(() => {});
+      spendCoins(cost);
+      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { aceCards: nextCards }, lifetimeSpentDelta: cost }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase Ace Card. Please try again.");
@@ -555,8 +590,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         return;
       }
       setInventory((inv) => ({ ...inv, confidencePills: nextPills }));
-      upProfile({ coins: profile.coins - cost });
-      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { confidencePills: nextPills } }).catch(() => {});
+      spendCoins(cost);
+      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { confidencePills: nextPills }, lifetimeSpentDelta: cost }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase Confidence Pill. Please try again.");
@@ -584,8 +619,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         return;
       }
       setInventory((inv) => ({ ...inv, revivalShots: nextShots }));
-      upProfile({ coins: profile.coins - cost });
-      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { revivalShots: nextShots } }).catch(() => {});
+      spendCoins(cost);
+      checkAchievements({ baseCoins: profile.coins - cost, inventoryOverride: { revivalShots: nextShots }, lifetimeSpentDelta: cost }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase Revival Shot. Please try again.");
@@ -751,7 +786,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         return;
       }
       setOwnedThemeIds((prev) => (prev.includes(themeId) ? prev : [...prev, themeId]));
-      upProfile({ coins: profile.coins - theme.cost });
+      spendCoins(theme.cost);
+      checkAchievements({ baseCoins: profile.coins - theme.cost, ownedThemeCountOverride: allOwnedThemeIds.length + 1, lifetimeSpentDelta: theme.cost }).catch(() => {});
     } catch (err) {
       console.error(err);
       setApiError("Failed to purchase theme. Please try again.");
@@ -808,6 +844,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         rewardThemeId: row.reward_theme_id ?? null,
         active: row.active !== false,
         sortOrder: row.sort_order ?? 0,
+        groupKey: row.group_key ?? null,
+        tier: row.tier ?? null,
       }))
     );
     setAchievementsLoading(false);
@@ -835,8 +873,20 @@ export function GameProvider({ children }: { children: ReactNode }) {
   // into the fetched history (deduped by id) instead of raced against it.
   // `baseCoins` lets a caller supply the coin total it already knows is
   // about to be true (e.g. mid-reward-payout) instead of reading the
-  // possibly-stale `profile.coins` closure.
-  async function checkAchievements(opts: { extraMatch?: any; baseCoins?: number; inventoryOverride?: Partial<Inventory> } = {}): Promise<AchievementDef[]> {
+  // possibly-stale `profile.coins` closure — `lifetimeEarnedDelta`/
+  // `lifetimeSpentDelta` do the same for the two lifetime counters, and
+  // `unlockedDebotIdsOverride`/`ownedThemeCountOverride` do it for a debot
+  // unlock / theme purchase that also hasn't landed in `opps`/
+  // `ownedThemeIds` state yet at the moment this runs.
+  async function checkAchievements(opts: {
+    extraMatch?: any;
+    baseCoins?: number;
+    inventoryOverride?: Partial<Inventory>;
+    unlockedDebotIdsOverride?: string[];
+    ownedThemeCountOverride?: number;
+    lifetimeEarnedDelta?: number;
+    lifetimeSpentDelta?: number;
+  } = {}): Promise<AchievementDef[]> {
     const historyRes = await loadGameData("history", user);
     let rawHistory: any[] = historyRes.ok && Array.isArray(historyRes.data) ? historyRes.data : [];
     if (opts.extraMatch && !rawHistory.some((m: any) => m.id && m.id === opts.extraMatch.id)) {
@@ -844,10 +894,19 @@ export function GameProvider({ children }: { children: ReactNode }) {
     }
     const matchHistory = rawHistory.map(normalizeMatch).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
+    const debotDifficultyById: Record<string, string> = {};
+    for (const o of opps) debotDifficultyById[String(o.id)] = o.diff;
+
     const newly = getNewlyUnlocked(achievements, unlockedAchievementIds, {
       matchHistory,
       inventory: opts.inventoryOverride ? { ...inventory, ...opts.inventoryOverride } : inventory,
       storeItems,
+      debotDifficultyById,
+      lifetimeDebucksEarned: (profile.lifetimeDebucksEarned || 0) + (opts.lifetimeEarnedDelta || 0),
+      lifetimeDebucksSpent: (profile.lifetimeDebucksSpent || 0) + (opts.lifetimeSpentDelta || 0),
+      unlockedDebotIds: opts.unlockedDebotIdsOverride ?? opps.filter((o) => o.unlocked).map((o) => o.id),
+      totalActiveDebotCount: opps.length,
+      ownedThemeCount: opts.ownedThemeCountOverride ?? allOwnedThemeIds.length,
     });
     if (newly.length === 0) return [];
 
@@ -866,7 +925,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
     const totalDebucks = newly.reduce((sum, a) => sum + (a.rewardDebucks || 0), 0);
     if (totalDebucks > 0) {
       const base = typeof opts.baseCoins === "number" ? opts.baseCoins : profile.coins;
-      upProfile({ coins: base + totalDebucks });
+      upProfile({ coins: base + totalDebucks, lifetimeDebucksEarned: (profile.lifetimeDebucksEarned || 0) + totalDebucks });
     }
 
     return newly;
@@ -1098,6 +1157,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         signOut,
         profile,
         upProfile,
+        earnCoins,
+        spendCoins,
         uploadAvatar,
         removeAvatar,
         opps,

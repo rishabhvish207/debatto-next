@@ -18,7 +18,7 @@ Built with Next.js (App Router), TypeScript, Tailwind, and Supabase (Postgres + 
 | **Profile** (`/profile`) | Playable — avatar, name, bio, stats, read-only Player ID for logged-in users |
 | **Admin** (`/admin`) | Playable (admin-only) — manage debots, topics, store items, themes, achievements, and game settings |
 | **Achievements** (`/achievements`) | Playable — admin-editable catalog (Admin → Achievements), auto-unlocked from match history + inventory, plus a manual-grant tool for one-off/cosmetic achievements |
-| **Learning** (`/learning`) | Playable — Documentation (argument structure, fallacies, technique), an AI Tutor chatbot, and a Game Guide |
+| **Learning** (`/learning`) | Playable — searchable/accordion Documentation (~40 entries across 5 categories), a daily 10-question MCQ Daily Challenge (server-graded, once per day), an AI Tutor chatbot, and a Game Guide |
 | **Online → Random** (`/online/random`) | Not built yet — schema ready (`matchmaking_queue`, `online_matches`, `online_match_rounds`, `try_match_player()` RPC) |
 | **Online → Friends** (`/online/friends`) | Not built yet — schema ready (`friendships` table) |
 
@@ -46,9 +46,10 @@ Create `.env.local`:
 NEXT_PUBLIC_SUPABASE_URL=your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 GROQ_API_KEY=your-groq-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ```
 
-`GROQ_API_KEY` is server-only (used in `app/api/debate/route.ts`) — never expose it with a `NEXT_PUBLIC_` prefix.
+`GROQ_API_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are both server-only — never expose either with a `NEXT_PUBLIC_` prefix. `GROQ_API_KEY` is used in `app/api/debate/route.ts`. `SUPABASE_SERVICE_ROLE_KEY` (Supabase dashboard → Settings → API → service_role, marked secret) is used only by `app/api/daily-challenge/route.ts` and `app/api/daily-challenge/submit/route.ts` — it's the only way to guarantee the Daily Challenge's correct answers never reach the browser, since Supabase RLS can't hide a single column of a jsonb row from an otherwise-permitted SELECT; the underlying table just has no client-facing SELECT policy at all, and only a key that bypasses RLS entirely can read it.
 
 ## Database setup
 
@@ -67,7 +68,9 @@ The app expects specific tables, columns, and **Row Level Security policies** in
 - `topics` — debate topics: `title`/`text`, `category`/`cat`, `is_system` (seeded topics vs. user-submitted), `user_id`
 - `pinned_topics` — per-user topic pins: `user_id`, `topic_id`
 - `hidden_topics` — per-user topic removals (used when a user "deletes" a system topic — it's hidden for them, not removed globally): `user_id`, `topic_id`
-- `app_settings` — key/value config the admin panel edits at runtime: `rounds_options`, `rounds_default`, `debot_vertices` (0–20 sides, blank = per-debot), `debot_diff_badge_style` (`badge`/`plain` — whether the difficulty label in the selection grid gets a background pill or plain text), `debucks_cheat_enabled`, `ai_model`, `ai_max_tokens`, `ai_temperature`, `ai_fallback_model`, `ai_fallback_enabled` (see "AI rate-limit fallback" below), `landing_bg_url` (public URL of the landing page's background image, shown at low opacity behind the logo; empty/absent means no background image), and the full Judge & Scoring set (`judge_system_prompt`, `judge_max_gain`, `judge_max_penalty`, `judge_max_opp_gain`, `judge_max_opp_penalty`, `judge_player_dmg_multiplier`, `judge_opp_dmg_multiplier`, `judge_impact_devastating`/`_strong`/`_solid`/`_weak`, `judge_no_penalty_bonus`, `judge_domination_bonus`, `judge_domination_margin`, `judge_low_effort_backstop_enabled` — see `config/Judge.ts`)
+- `app_settings` — key/value config the admin panel edits at runtime: `rounds_options`, `rounds_default`, `debot_vertices` (0–20 sides, blank = per-debot), `debot_diff_badge_style` (`badge`/`plain` — whether the difficulty label in the selection grid gets a background pill or plain text), `debucks_cheat_enabled`, `ai_model`, `ai_max_tokens`, `ai_temperature`, `ai_fallback_model`, `ai_fallback_enabled` (see "AI rate-limit fallback" below), `landing_bg_url` (public URL of the landing page's background image, shown at low opacity behind the logo; empty/absent means no background image), `daily_challenge_reward_per_correct` (debucks per correct Daily Challenge answer, default 2), and the full Judge & Scoring set (`judge_system_prompt`, `judge_max_gain`, `judge_max_penalty`, `judge_max_opp_gain`, `judge_max_opp_penalty`, `judge_player_dmg_multiplier`, `judge_opp_dmg_multiplier`, `judge_impact_devastating`/`_strong`/`_solid`/`_weak`, `judge_no_penalty_bonus`, `judge_domination_bonus`, `judge_domination_margin`, `judge_low_effort_backstop_enabled` — see `config/Judge.ts`)
+- `daily_challenges` — one row per UTC calendar day: `challenge_date` (unique), `questions` (jsonb array of 10 `{text, options[4], correctIndex}`). Generated on-demand by the first request of a new day (`app/api/daily-challenge/route.ts`) and cached from then on, so every player that day gets the identical set. Has **no client-facing SELECT policy** — read only via the service role, since a normal RLS policy can't hide `correctIndex` from an otherwise-permitted row read.
+- `daily_challenge_attempts` — one row per user per day: `user_id`, `challenge_date`, `score`, `correct_count`, `total_questions`. Written only by `app/api/daily-challenge/submit/route.ts` (service role) — this is what enforces "once per day" server-side and feeds the Daily Devotee achievement's total-completed count.
 
 ### Required RLS policies
 
@@ -433,6 +436,52 @@ values
   ('big_spender_3', 'Big Spender', '🛍', 'Spend 2000 debucks in the Store in total.', 'total_debucks_spent', '{"count":2000}', 40, 'big_spender', 3, 32),
   ('collector', 'Collector', '🗂', 'Unlock every debot in the roster.', 'all_debots_unlocked', '{}', 75, null, null, 40),
   ('first_theme', 'New Look', '🎨', 'Buy your first theme.', 'themes_owned', '{"count":1}', 10, null, null, 41)
+on conflict (key) do nothing;
+```
+
+### Daily Challenge migration
+
+A 10-question MCQ quiz, the same for every player each UTC day, generated on-demand and graded server-side so
+answers never reach the browser before submission — see `app/api/daily-challenge/route.ts` and
+`app/api/daily-challenge/submit/route.ts`. Requires `SUPABASE_SERVICE_ROLE_KEY` in your env (see above).
+
+```sql
+create table if not exists public.daily_challenges (
+  id uuid primary key default gen_random_uuid(),
+  challenge_date date not null unique,
+  questions jsonb not null,
+  created_at timestamptz default now()
+);
+alter table public.daily_challenges enable row level security;
+-- Deliberately no select policy at all — see app/api/daily-challenge/route.ts.
+
+create table if not exists public.daily_challenge_attempts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade,
+  challenge_date date not null,
+  score integer not null,
+  correct_count integer not null,
+  total_questions integer not null,
+  completed_at timestamptz default now(),
+  unique (user_id, challenge_date)
+);
+alter table public.daily_challenge_attempts enable row level security;
+create policy "Users can read their own daily attempts" on public.daily_challenge_attempts for select to authenticated
+  using (auth.uid() = user_id);
+-- No insert/update policy for authenticated — only the service role
+-- (submit route) writes here, since the score must come from server-side
+-- grading, never trusted from the client directly.
+
+insert into public.app_settings (key, value)
+values ('daily_challenge_reward_per_correct', '2')
+on conflict (key) do nothing;
+
+insert into public.achievements (key, name, icon, description, condition_type, condition_config, reward_debucks, group_key, tier, sort_order)
+values
+  ('daily_devotee_1', 'Daily Devotee', '📅', 'Complete 10 Daily Challenges in total.', 'daily_challenges_completed', '{"count":10}', 15, 'daily_devotee', 1, 50),
+  ('daily_devotee_2', 'Daily Devotee', '📅', 'Complete 30 Daily Challenges in total.', 'daily_challenges_completed', '{"count":30}', 40, 'daily_devotee', 2, 51),
+  ('daily_devotee_3', 'Daily Devotee', '📅', 'Complete 50 Daily Challenges in total.', 'daily_challenges_completed', '{"count":50}', 75, 'daily_devotee', 3, 52),
+  ('daily_devotee_4', 'Daily Devotee', '📅', 'Complete 100 Daily Challenges in total.', 'daily_challenges_completed', '{"count":100}', 150, 'daily_devotee', 4, 53)
 on conflict (key) do nothing;
 ```
 

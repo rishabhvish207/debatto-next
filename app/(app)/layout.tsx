@@ -7,7 +7,7 @@ import { RightDrawer } from "@/components/shell/RightDrawer";
 import { ConfirmModal } from "@/components/shell/ConfirmModal";
 
 export default function AppGroupLayout({ children }: { children: React.ReactNode }) {
-  const { apiError, setApiError, pendingNavAction, confirmNavigation, cancelNavigation, siteBg, equippedTheme } = useGame();
+  const { apiError, setApiError, pendingNavAction, confirmNavigation, cancelNavigation, navGuardMessage, siteBg, equippedTheme } = useGame();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   // A theme's own background image takes priority over the admin's
@@ -61,8 +61,8 @@ export default function AppGroupLayout({ children }: { children: React.ReactNode
 
       {pendingNavAction && (
         <ConfirmModal
-          title="Exit this match?"
-          message="Leaving now will end the debate and lose your progress in this round."
+          title={navGuardMessage.title}
+          message={navGuardMessage.message}
           confirmLabel="Exit anyway"
           cancelLabel="Stay"
           onConfirm={confirmNavigation}

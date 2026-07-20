@@ -15,10 +15,16 @@ export function Documentation() {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    supabase.from("learning_content").select("body").eq("key", "documentation").maybeSingle().then(({ data }) => {
-      if (data?.body) setContent(data.body);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    (async () => {
+      try {
+        const { data } = await supabase.from("learning_content").select("body").eq("key", "documentation").maybeSingle();
+        if (data?.body) setContent(data.body);
+      } catch {
+        // keep the default content
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
   const [hitCount, setHitCount] = useState(0);

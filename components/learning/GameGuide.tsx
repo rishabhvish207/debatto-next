@@ -16,10 +16,16 @@ export function GameGuide() {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    supabase.from("learning_content").select("body").eq("key", "game_guide").maybeSingle().then(({ data }) => {
-      if (data?.body) setContent(data.body);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    (async () => {
+      try {
+        const { data } = await supabase.from("learning_content").select("body").eq("key", "game_guide").maybeSingle();
+        if (data?.body) setContent(data.body);
+      } catch {
+        // keep the default content
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
   useEffect(() => {

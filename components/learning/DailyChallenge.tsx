@@ -4,17 +4,12 @@ import { useEffect, useState } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
+import { todayUTC, GUEST_COMPLETIONS_KEY, GUEST_TODAY_RESULT_PREFIX } from "@/lib/dailyChallengeStatus";
 
 const supabase = createClient();
 
 type PublicQuestion = { text: string; options: [string, string, string, string] };
 type SubmitResult = { correctCount: number; totalQuestions: number; score: number; rewardPerCorrect: number; results: { correct: boolean; correctIndex: number }[] };
-
-function todayUTC(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-const GUEST_COMPLETIONS_KEY = "debatto:daily_challenge_completions"; // array of ISO dates, guest-only
-const GUEST_TODAY_RESULT_PREFIX = "debatto:daily_challenge_result:"; // + date -> stored SubmitResult, guest-only
 
 type Phase = "loading" | "intro" | "already-done" | "in-progress" | "submitting" | "results" | "error";
 

@@ -13,6 +13,8 @@
 import { useGame } from "@/contexts/GameContext";
 import { useState } from "react";
 import { displayName, tierColor } from "@/config/Achievements";
+import { AppIcon } from "@/components/ui/AppIcon";
+import { ChevronDown } from "lucide-react";
 
 export default function AchievementsPage() {
   const { achievements, achievementsLoading, unlockedAchievementIds, opps } = useGame();
@@ -115,7 +117,7 @@ export default function AchievementsPage() {
         <p style={{ color: "var(--muted)", fontSize: 13 }}>Loading achievements…</p>
       ) : visible.length === 0 ? (
         <div className="card" style={{ padding: 24, textAlign: "center" }}>
-          <div style={{ fontSize: 28, marginBottom: 8 }}>🏅</div>
+          <div style={{ marginBottom: 8, display: "flex", justifyContent: "center" }}><AppIcon token="🏅" size={28} style={{ color: "var(--muted)" }} /></div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Nothing here yet</div>
         </div>
       ) : (
@@ -136,12 +138,11 @@ export default function AchievementsPage() {
                       width: 44, height: 44, borderRadius: 10, flexShrink: 0,
                       background: unlocked ? `${color}33` : "var(--faint)",
                       border: unlocked ? `1.5px solid ${color}` : "1.5px solid transparent",
-                      display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22,
-                      filter: unlocked ? "none" : "grayscale(1)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
                       transition: "background .2s, border-color .2s",
                     }}
                   >
-                    {unlocked ? a.icon : "🔒"}
+                    <AppIcon token={unlocked ? a.icon : "🔒"} size={20} style={{ color: unlocked ? color : "var(--muted)" }} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 600, color: unlocked ? color : "var(--text)" }}>
@@ -158,9 +159,13 @@ export default function AchievementsPage() {
                       {a.rewardDebucks > 0 && (
                         <div style={{ fontSize: 12, color: "var(--amber)", fontWeight: 700 }}>+{a.rewardDebucks}</div>
                       )}
-                      {unlocked && <div style={{ fontSize: 11, color: "var(--green)", fontWeight: 600, marginTop: 2 }}>✓ Unlocked</div>}
+                      {unlocked && (
+                        <div style={{ fontSize: 11, color: "var(--green)", fontWeight: 600, marginTop: 2, display: "flex", alignItems: "center", gap: 3, justifyContent: "flex-end" }}>
+                          <AppIcon token="✓" size={11} /> Unlocked
+                        </div>
+                      )}
                     </div>
-                    {g.isGroup && <span style={{ color: "var(--muted)", fontSize: 12, transform: expanded ? "rotate(180deg)" : "none", transition: "transform .15s" }}>▾</span>}
+                    {g.isGroup && <ChevronDown size={14} color="var(--muted)" style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform .15s" }} />}
                   </div>
                 </div>
 
@@ -177,7 +182,7 @@ export default function AchievementsPage() {
                             <div style={{ fontSize: 11, color: "var(--muted)" }}>{tierA.description || conditionHint(tierA)}</div>
                           </div>
                           {tierUnlocked ? (
-                            <span style={{ fontSize: 11, color: "var(--green)", fontWeight: 600 }}>✓</span>
+                            <span style={{ fontSize: 11, color: "var(--green)", fontWeight: 600, display: "flex", alignItems: "center" }}><AppIcon token="✓" size={11} /></span>
                           ) : (
                             tierA.rewardDebucks > 0 && <span style={{ fontSize: 11, color: "var(--amber)" }}>+{tierA.rewardDebucks}</span>
                           )}

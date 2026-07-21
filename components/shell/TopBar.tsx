@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useGame } from "@/contexts/GameContext";
 import { hasCompletedToday } from "@/lib/dailyChallengeStatus";
+import { AppIcon } from "@/components/ui/AppIcon";
 
 export function TopBar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
   const { user, signInWithGoogle, requestNavigation } = useGame();
@@ -36,7 +37,7 @@ export function TopBar({ onOpenDrawer }: { onOpenDrawer: () => void }) {
             title="Today's Daily Challenge isn't done yet"
             style={{ position: "relative", display: "flex", alignItems: "center", gap: 5 }}
           >
-            <span style={{ fontSize: 15 }}>🧩</span>
+            <AppIcon token="🧩" size={16} />
             <span
               style={{
                 position: "absolute", top: -2, right: -2, width: 8, height: 8, borderRadius: "50%",

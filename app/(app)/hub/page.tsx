@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AppIcon } from "@/components/ui/AppIcon";
 
 const CARDS = [
   { href: "/offline", label: "Debots", desc: "Debate an AI opponent", icon: "⚔", style: "hub-card-primary" },
@@ -19,7 +20,7 @@ export default function HubPage() {
       <div className="hub-grid">
         {CARDS.map((c) => (
           <Link key={c.href} href={c.href} className={`hub-card ${c.style}`}>
-            <span style={{ fontSize: 30 }}>{c.icon}</span>
+            <AppIcon token={c.icon} size={28} strokeWidth={1.6} style={{ color: "var(--blue)" }} />
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>{c.label}</span>
             <span style={{ fontSize: 11, color: "var(--muted)" }}>{c.desc}</span>
           </Link>

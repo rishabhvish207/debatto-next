@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { DebucksIcon } from "../ui/DebucksIcon";
+import { AppIcon } from "../ui/AppIcon";
 import { useGame } from "@/contexts/GameContext";
 
 const CARD_SIZE = 92; // uniform for every debot — no more index-based scaling
@@ -129,7 +130,7 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
               <div style={{ position: "relative" }}>
                 <DebotShape o={o} size={CARD_SIZE} sel={sel} hov={hov} hex={hex} globalVertices={debotVertices} />
                 {sel && (
-                  <div style={{ position: "absolute", top: 2, right: 4, fontSize: 11, color: hex, fontWeight: 700 }}>✓</div>
+                  <div style={{ position: "absolute", top: 2, right: 4, color: hex, display: "flex" }}><AppIcon token="✓" size={13} strokeWidth={3} /></div>
                 )}
               </div>
 
@@ -148,7 +149,7 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
 
                 {!o.unlocked && (
                   <div style={{ fontSize: 10, color: o.dc, marginTop: 3, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    🔒 <DebucksIcon style={{ marginLeft: 2, marginRight: 1 }} />{o.cost}
+                    <AppIcon token="🔒" size={11} /> <DebucksIcon style={{ marginLeft: 2, marginRight: 1 }} />{o.cost}
                   </div>
                 )}
               </div>
@@ -217,7 +218,9 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
               style={{ width: "100%" }}
               onClick={() => onSelect(selectedOpp?.id === focus.id ? null : focus)}
             >
-              {selectedOpp?.id === focus.id ? "Debot selected ✓" : "Select this Debot →"}
+              selectedOpp?.id === focus.id
+                ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Debot selected <AppIcon token="✓" size={13} /></span>
+                : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Select this Debot <AppIcon token="→" size={13} /></span>
             </button>
           )}
         </div>

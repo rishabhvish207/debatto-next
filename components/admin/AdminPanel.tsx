@@ -19,6 +19,8 @@ import { CONDITION_TYPE_META, AchievementConditionType, displayName } from "@/co
 import { DEFAULT_JUDGE_SETTINGS } from "@/config/Judge";
 import { DEFAULT_DOCUMENTATION_MD, DEFAULT_GAME_GUIDE_MD } from "@/config/LearningDefaults";
 import { Markdown } from "@/components/ui/Markdown";
+import { AppIcon } from "@/components/ui/AppIcon";
+import { Settings, Sparkles } from "lucide-react";
 
 const supabase = createClient();
 
@@ -134,8 +136,8 @@ export function AdminPanel({ profile }: AdminPanelProps) {
 
   return (
     <div className="card" style={{ padding: 16, marginTop: 24, borderColor: "var(--amber)" }}>
-      <div style={{ fontSize: 11, color: "var(--amber)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>
-        ⚙ Admin
+      <div style={{ fontSize: 11, color: "var(--amber)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10, display: "flex", alignItems: "center", gap: 5 }}>
+        <Settings size={12} /> Admin
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         {([
@@ -926,7 +928,7 @@ function ItemsAdmin() {
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {items.map((it) => (
             <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", opacity: it.active === false ? 0.5 : 1 }}>
-              <span style={{ fontSize: 18 }}>{it.icon}</span>
+              <span style={{ display: "flex" }}><AppIcon token={it.icon} size={18} style={{ color: "var(--blue)" }} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
                 <div style={{ fontSize: 11, color: "var(--muted)" }}>
@@ -1512,7 +1514,7 @@ function AchievementsCatalogAdmin() {
           {items.map((a, i) => (
             <div key={a.id} ref={reorder.setRowRef(i)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", opacity: a.active === false ? 0.5 : 1, ...reorder.rowStyle(i) }}>
               <span {...reorder.handleProps(i)}>⠿</span>
-              <span style={{ fontSize: 18 }}>{a.icon}</span>
+              <span style={{ display: "flex" }}><AppIcon token={a.icon} size={18} style={{ color: "var(--amber)" }} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {displayName(a as any)}
@@ -1628,7 +1630,7 @@ function AchievementsGrantsAdmin() {
         const granted = grantedIds.includes(a.id);
         return (
           <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", marginBottom: 6 }}>
-            <span style={{ fontSize: 18 }}>{a.icon}</span>
+            <span style={{ display: "flex" }}><AppIcon token={a.icon} size={18} style={{ color: "var(--amber)" }} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</div>
               <div style={{ fontSize: 11, color: "var(--muted)" }}>{a.description}</div>
@@ -2380,7 +2382,7 @@ function LabeledTextarea({
             cursor: cleaning ? "default" : "pointer", opacity: !(value ?? "").trim() ? 0.5 : 1,
           }}
         >
-          {cleaning ? "Cleaning…" : "✨ Clean up"}
+          {cleaning ? "Cleaning…" : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Sparkles size={13} /> Clean up</span>}
         </button>
       </div>
       <textarea

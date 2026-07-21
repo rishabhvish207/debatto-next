@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
 import { displayName, tierColor } from "@/config/Achievements";
+import { AppIcon } from "@/components/ui/AppIcon";
 
 export default function ProfilePage() {
   const { user, profile, upProfile, uploadAvatar, removeAvatar, signOut, signInWithGoogle, achievements, unlockedAchievementIds } = useGame();
@@ -116,7 +117,7 @@ export default function ProfilePage() {
                     color: "#fff", padding: 0,
                   }}
                 >
-                  ✎
+                  <AppIcon token="✎" size={12} />
                 </button>
                 {profile?.avatar_url && !avatarBusy && (
                   <button
@@ -217,7 +218,7 @@ export default function ProfilePage() {
 
       <a href="/achievements" className="card" style={{ padding: 16, marginTop: 16, textDecoration: "none", display: "block" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 22 }}>🏅</span>
+          <span style={{ display: "flex" }}><AppIcon token="🏅" size={20} style={{ color: "var(--amber)" }} /></span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>Achievements</div>
             <div style={{ fontSize: 11, color: "var(--muted)" }}>

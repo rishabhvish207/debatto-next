@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { Markdown } from "@/components/ui/Markdown";
+import { Search } from "lucide-react";
 import { DEFAULT_GAME_GUIDE_MD } from "@/config/LearningDefaults";
 
 const supabase = createClient();
@@ -47,7 +48,7 @@ export function GameGuide() {
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 18, alignItems: "center" }}>
         <div style={{ position: "relative", flex: 1 }}>
-          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 14 }}>🔍</span>
+          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", display: "flex" }}><Search size={14} /></span>
           <input
             className="input-field"
             placeholder="Search this page…"

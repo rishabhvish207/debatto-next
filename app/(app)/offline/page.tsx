@@ -15,6 +15,7 @@ import { InputPanel } from "@/components/game/InputPanel";
 import { ItemsBar } from "@/components/game/ItemsBar";
 import { GAME_CONFIG } from "@/config/Game";
 import { fillTemplate } from "@/config/Judge";
+import { AppIcon } from "@/components/ui/AppIcon";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 
 /* ═══════════════════════════════════════════════════════════
@@ -601,7 +602,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
 
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           <div style={{ position: "relative", flex: 1 }}>
-            <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", fontSize: 14 }}>⌕</span>
+            <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", display: "flex" }}><AppIcon token="🔍" size={14} /></span>
             <input className="search-input" placeholder="Search topics by keyword…" value={topicSearch} onChange={e => setTopicSearch(e.target.value)} />
           </div>
           <button
@@ -609,23 +610,24 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
             disabled={!topicSearch.trim() || aiSearching}
             onClick={searchTopicsWithAI}
             title="Ask AI to suggest debate topics related to this search"
+            style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
           >
-            {aiSearching ? "Searching…" : "✦ Search AI"}
+            {aiSearching ? "Searching…" : <><AppIcon token="✨" size={13} /> Search AI</>}
           </button>
         </div>
 
         {aiSuggestions && (
           <div className="card anim-fade-up" style={{ padding: 12, marginBottom: 12 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <div style={{ fontSize: 11, color: "var(--blue)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                ✦ AI Suggestions
+              <div style={{ fontSize: 11, color: "var(--blue)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", display: "flex", alignItems: "center", gap: 5 }}>
+                <AppIcon token="✨" size={12} /> AI Suggestions
               </div>
               <button
                 onClick={() => setAiSuggestions(null)}
                 title="Close"
-                style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", fontSize: 14, lineHeight: 1, color: "var(--muted)" }}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", display: "flex", color: "var(--muted)" }}
               >
-                ✕
+                <AppIcon token="✕" size={14} />
               </button>
             </div>
             {aiSuggestions.length === 0 ? (
@@ -640,8 +642,9 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
                   className="btn btn-ghost btn-sm"
                   disabled={savedSuggestionIdx.includes(i)}
                   onClick={() => saveSuggestion(s, i)}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
                 >
-                  {savedSuggestionIdx.includes(i) ? "Saved ✓" : "💾 Save"}
+                  {savedSuggestionIdx.includes(i) ? <><AppIcon token="✓" size={12} /> Saved</> : <><AppIcon token="💾" size={12} /> Save</>}
                 </button>
               </div>
             ))}
@@ -774,7 +777,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
                   onClick={handleSaveTopic}
                   title="Save this to your topic list for future battles"
                 >
-                  {savingTopic ? "Saving…" : "💾 Save topic"}
+                  {savingTopic ? "Saving…" : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><AppIcon token="💾" size={13} /> Save topic</span>}
                 </button>
               </div>
             </>
@@ -782,7 +785,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
         </div>
 
         <button className="btn btn-primary btn-lg" disabled={!activeTopic || !opp} style={{ width: "100%" }} onClick={startBattle}>
-          Begin Debate →
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>Begin Debate <AppIcon token="→" size={15} /></span>
         </button>
       </div>
     );
@@ -800,7 +803,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
 
         <div className="card" style={{ padding: "10px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 7 }}>
-            <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }} onClick={() => requestNavigation(() => setPage("setup"))}>← Exit</button>
+            <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }} onClick={() => requestNavigation(() => setPage("setup"))} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><AppIcon token="←" size={13} /> Exit</button>
             <div style={{ fontSize: 12, color: "var(--muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{activeTopic?.text}"</div>
             <span className="badge" style={{ background: "var(--faint)", color: "var(--muted)" }}>R {round}/{rounds}</span>
             <span className="badge" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}><DebucksIcon style={{ marginRight: 4 }} />{profile.coins}</span>
@@ -881,7 +884,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
               </div>
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", fontStyle: "italic", marginBottom: 14 }}>"{lastEval.critique}"</div>
-            <button className="btn btn-primary" style={{ width: "100%" }} onClick={triggerOpponentCounter}>See Debot's Counter →</button>
+            <button className="btn btn-primary" style={{ width: "100%" }} onClick={triggerOpponentCounter} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>See Debot's Counter <AppIcon token="→" size={15} /></button>
           </div>
         )}
 
@@ -896,7 +899,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
                </div>
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>The debot fired back, dealing damage to your HP.</div>
-            <button className="btn btn-primary" style={{ width: "100%" }} onClick={advanceRound}>Next Round →</button>
+            <button className="btn btn-primary" style={{ width: "100%" }} onClick={advanceRound} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>Next Round <AppIcon token="→" size={15} /></button>
           </div>
         )}
 
@@ -904,11 +907,11 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
         {showHint && hintData && phase === "player-turn" && (
           <div className="card anim-fade-up" style={{ padding: 14, borderColor: "rgba(245,166,35,0.3)", background: "var(--amber-soft)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <span style={{ fontSize: 12, color: "var(--amber)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>🔍 Insight</span>
+              <span style={{ fontSize: 12, color: "var(--amber)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><AppIcon token="🔍" size={12} /> Insight</span></span>
               <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setShowHint(false)}>×</button>
             </div>
-            {hintData.fallacies?.map((f: any, i: number) => <div key={i} style={{ fontSize: 12, color: "var(--red)", marginBottom: 4 }}>⚠ <b>{f.type}</b>: "{f.text}"</div>)}
-            {hintData.weak_points?.map((wp: any, i: number) => <div key={i} style={{ fontSize: 12, color: "var(--amber)", marginBottom: 4 }}>↗ "{wp}"</div>)}
+            {hintData.fallacies?.map((f: any, i: number) => <div key={i} style={{ fontSize: 12, color: "var(--red)", marginBottom: 4, display: "flex", gap: 5 }}><AppIcon token="⚠" size={13} /><span><b>{f.type}</b>: "{f.text}"</span></div>)}
+            {hintData.weak_points?.map((wp: any, i: number) => <div key={i} style={{ fontSize: 12, color: "var(--amber)", marginBottom: 4, display: "flex", gap: 5 }}><AppIcon token="↗" size={13} /><span>"{wp}"</span></div>)}
           </div>
         )}
 
@@ -916,7 +919,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
         {showAns && ansData && phase === "player-turn" && (
           <div className="card anim-fade-up" style={{ padding: 16, borderColor: "rgba(107,159,255,0.25)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <span style={{ fontSize: 12, color: "var(--blue)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>✦ Suggested Responses</span>
+              <span style={{ fontSize: 12, color: "var(--blue)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><AppIcon token="✨" size={12} /> Suggested Responses</span></span>
               <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setShowAns(false)}>×</button>
             </div>
             {ansData.map((opt: any, i: number) => (
@@ -924,7 +927,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
                 <div style={{ fontSize: 12, color: "var(--blue)", fontWeight: 600, marginBottom: 4 }}>{opt.label}</div>
                 <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.65, marginBottom: 5 }}>{opt.response}</div>
                 <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>{opt.why}</div>
-                <button className="btn btn-ghost btn-sm" onClick={() => { setInput(opt.response); setShowAns(false); }}>Use this →</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => { setInput(opt.response); setShowAns(false); }} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>Use this <AppIcon token="→" size={13} /></button>
               </div>
             ))}
           </div>
@@ -1034,7 +1037,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
                 {h.eval?.fallacies?.length > 0 && (
                   <div style={{ marginBottom: 8 }}>
                     {h.eval.fallacies.map((f: any, fi: number) => (
-                      <div key={fi} style={{ fontSize: 11, color: "var(--red)" }}>⚠ <b>{f.type}</b>: "{f.text}"</div>
+                      <div key={fi} style={{ fontSize: 11, color: "var(--red)", display: "flex", gap: 4 }}><AppIcon token="⚠" size={12} /><span><b>{f.type}</b>: "{f.text}"</span></div>
                     ))}
                   </div>
                 )}

@@ -5,6 +5,7 @@ import { useGame } from "@/contexts/GameContext";
 import { TopBar } from "@/components/shell/TopBar";
 import { RightDrawer } from "@/components/shell/RightDrawer";
 import { ConfirmModal } from "@/components/shell/ConfirmModal";
+import { AppIcon } from "@/components/ui/AppIcon";
 
 export default function AppGroupLayout({ children }: { children: React.ReactNode }) {
   const { apiError, setApiError, pendingNavAction, confirmNavigation, cancelNavigation, navGuardMessage, siteBg, equippedTheme } = useGame();
@@ -52,7 +53,7 @@ export default function AppGroupLayout({ children }: { children: React.ReactNode
           fontSize: 13, border: "1px solid var(--red)", display: "flex", justifyContent: "space-between",
           margin: "12px 16px 0",
         }}>
-          <span>⚠ {apiError}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}><AppIcon token="⚠" size={14} /> {apiError}</span>
           <button className="btn btn-ghost btn-sm" onClick={() => setApiError("")}>Dismiss</button>
         </div>
       )}

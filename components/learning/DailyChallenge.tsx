@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
+import { AppIcon } from "@/components/ui/AppIcon";
+import { CheckCircle2, XCircle, Trophy, Puzzle } from "lucide-react";
 import { todayUTC, GUEST_COMPLETIONS_KEY, GUEST_TODAY_RESULT_PREFIX } from "@/lib/dailyChallengeStatus";
 
 const supabase = createClient();
@@ -163,7 +165,7 @@ export function DailyChallenge() {
   if (phase === "already-done" && result) {
     return (
       <div className="card" style={{ padding: 24, textAlign: "center" }}>
-        <div style={{ fontSize: 32, marginBottom: 8 }}>✅</div>
+        <div style={{ marginBottom: 8, display: "flex", justifyContent: "center" }}><CheckCircle2 size={32} color="var(--green)" /></div>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Today's challenge is done</div>
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>
           {result.correctCount} / {result.totalQuestions} correct
@@ -179,7 +181,7 @@ export function DailyChallenge() {
   if (phase === "intro") {
     return (
       <div className="card" style={{ padding: 24, textAlign: "center" }}>
-        <div style={{ fontSize: 32, marginBottom: 8 }}>🧩</div>
+        <div style={{ marginBottom: 8, display: "flex", justifyContent: "center" }}><Puzzle size={32} color="var(--blue)" /></div>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Daily Challenge</div>
         <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 4, lineHeight: 1.6 }}>
           10 questions on fallacies, counter-arguments, and debate judgment — the same set for everyone today,
@@ -226,7 +228,7 @@ export function DailyChallenge() {
     return (
       <div>
         <div className="card" style={{ padding: 24, textAlign: "center", marginBottom: 16 }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>{result.correctCount === result.totalQuestions ? "🏆" : "🧩"}</div>
+          <div style={{ marginBottom: 8, display: "flex", justifyContent: "center" }}>{result.correctCount === result.totalQuestions ? <Trophy size={32} color="var(--amber)" /> : <Puzzle size={32} color="var(--blue)" />}</div>
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>{result.correctCount} / {result.totalQuestions} correct</div>
           <div style={{ fontSize: 15, color: "var(--amber)", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>
             +{result.score} <DebucksIcon />
@@ -239,7 +241,7 @@ export function DailyChallenge() {
               return (
                 <div key={i} className="card" style={{ padding: 14 }}>
                   <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontSize: 13 }}>{r.correct ? "✅" : "❌"}</span>
+                    <span style={{ display: "flex" }}>{r.correct ? <CheckCircle2 size={15} color="var(--green)" /> : <XCircle size={15} color="var(--red)" />}</span>
                     <span style={{ fontSize: 13, fontWeight: 600 }}>{q.text}</span>
                   </div>
                   <div style={{ fontSize: 12, color: "var(--green)", marginLeft: 21 }}>{q.options[r.correctIndex]}</div>

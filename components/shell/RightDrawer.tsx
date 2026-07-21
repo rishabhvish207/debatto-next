@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useGame } from "@/contexts/GameContext";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
+import { AppIcon } from "@/components/ui/AppIcon";
 
 export function RightDrawer({ onClose }: { onClose: () => void }) {
   const { user, profile, signInWithGoogle, signOut, requestNavigation } = useGame();
@@ -41,17 +42,17 @@ export function RightDrawer({ onClose }: { onClose: () => void }) {
         </div>
 
         <button className="drawer-item" onClick={() => go("/profile")}>
-          <span style={{ width: 20, textAlign: "center" }}>👤</span> Profile
+          <span style={{ width: 20, display: "inline-flex", justifyContent: "center" }}><AppIcon token="👤" size={16} /></span> Profile
         </button>
         <button className="drawer-item" onClick={() => go("/history")}>
-          <span style={{ width: 20, textAlign: "center" }}>📜</span> Match History
+          <span style={{ width: 20, display: "inline-flex", justifyContent: "center" }}><AppIcon token="📜" size={16} /></span> Match History
         </button>
         <button className="drawer-item" onClick={() => go("/settings")}>
-          <span style={{ width: 20, textAlign: "center" }}>⚙</span> Settings
+          <span style={{ width: 20, display: "inline-flex", justifyContent: "center" }}><AppIcon token="⚙" size={16} /></span> Settings
         </button>
         {profile?.is_admin && (
           <button className="drawer-item" style={{ color: "var(--amber)" }} onClick={() => go("/admin")}>
-            <span style={{ width: 20, textAlign: "center" }}>🛠</span> Admin
+            <span style={{ width: 20, display: "inline-flex", justifyContent: "center" }}><AppIcon token="🛠" size={16} /></span> Admin
           </button>
         )}
       </div>

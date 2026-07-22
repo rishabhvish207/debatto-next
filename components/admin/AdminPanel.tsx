@@ -17,6 +17,10 @@ import { callAI } from "@/lib/ai";
 import { DEFAULT_THEMES, FONT_PRESETS } from "@/config/Themes";
 import { CONDITION_TYPE_META, AchievementConditionType, displayName } from "@/config/Achievements";
 import { DEFAULT_JUDGE_SETTINGS } from "@/config/Judge";
+import { DEFAULT_DOCUMENTATION_MD, DEFAULT_GAME_GUIDE_MD } from "@/config/LearningDefaults";
+import { Markdown } from "@/components/ui/Markdown";
+import { AppIcon } from "@/components/ui/AppIcon";
+import { Settings, Sparkles } from "lucide-react";
 
 const supabase = createClient();
 
@@ -125,15 +129,15 @@ function useDragReorder(onCommit: (from: number, to: number) => void) {
 }
 
 export function AdminPanel({ profile }: AdminPanelProps) {
-  const [tab, setTab] = useState<"debots" | "topics" | "store" | "achievements" | "settings" | "ai">("debots");
+  const [tab, setTab] = useState<"debots" | "topics" | "store" | "achievements" | "learning" | "settings" | "ai">("debots");
 
   // Fail closed: no profile, or not an admin -> render nothing at all.
   if (!profile?.is_admin) return null;
 
   return (
     <div className="card" style={{ padding: 16, marginTop: 24, borderColor: "var(--amber)" }}>
-      <div style={{ fontSize: 11, color: "var(--amber)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>
-        ⚙ Admin
+      <div style={{ fontSize: 11, color: "var(--amber)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10, display: "flex", alignItems: "center", gap: 5 }}>
+        <Settings size={12} /> Admin
       </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         {([
@@ -141,6 +145,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
           ["topics", "Topics"],
           ["store", "Store"],
           ["achievements", "Achievements"],
+          ["learning", "Learning"],
           ["settings", "Settings"],
           ["ai", "AI"],
         ] as const).map(([t, label]) => (
@@ -158,6 +163,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
       {tab === "topics" && <TopicsAdmin />}
       {tab === "store" && <StoreAdmin />}
       {tab === "achievements" && <AchievementsAdmin />}
+      {tab === "learning" && <LearningAdmin />}
       {tab === "settings" && <SettingsAdmin />}
       {tab === "ai" && <AiSettingsAdmin />}
     </div>
@@ -922,7 +928,7 @@ function ItemsAdmin() {
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {items.map((it) => (
             <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", opacity: it.active === false ? 0.5 : 1 }}>
-              <span style={{ fontSize: 18 }}>{it.icon}</span>
+              <span style={{ display: "flex" }}><AppIcon token={it.icon} size={18} style={{ color: "var(--blue)" }} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
                 <div style={{ fontSize: 11, color: "var(--muted)" }}>
@@ -1508,7 +1514,7 @@ function AchievementsCatalogAdmin() {
           {items.map((a, i) => (
             <div key={a.id} ref={reorder.setRowRef(i)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", opacity: a.active === false ? 0.5 : 1, ...reorder.rowStyle(i) }}>
               <span {...reorder.handleProps(i)}>⠿</span>
-              <span style={{ fontSize: 18 }}>{a.icon}</span>
+              <span style={{ display: "flex" }}><AppIcon token={a.icon} size={18} style={{ color: "var(--amber)" }} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {displayName(a as any)}
@@ -1624,7 +1630,7 @@ function AchievementsGrantsAdmin() {
         const granted = grantedIds.includes(a.id);
         return (
           <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 6, background: "var(--faint)", marginBottom: 6 }}>
-            <span style={{ fontSize: 18 }}>{a.icon}</span>
+            <span style={{ display: "flex" }}><AppIcon token={a.icon} size={18} style={{ color: "var(--amber)" }} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</div>
               <div style={{ fontSize: 11, color: "var(--muted)" }}>{a.description}</div>
@@ -1638,6 +1644,109 @@ function AchievementsGrantsAdmin() {
         );
       })}
       {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+    </div>
+  );
+}
+
+// ===========================================================================
+// LEARNING — Documentation and Game Guide are stored as freeform markdown
+// in `learning_content` (public read, admin-only write), rendered by
+// components/ui/Markdown.tsx on the player-facing side. Paste/write .md
+// here, hit Save, and it shows up themed on the Learning tab immediately.
+// ===========================================================================
+
+const LEARNING_DOCS = [
+  { key: "documentation", label: "Documentation" },
+  { key: "game_guide", label: "Game Guide" },
+] as const;
+
+function LearningAdmin() {
+  const [which, setWhich] = useState<(typeof LEARNING_DOCS)[number]["key"]>("documentation");
+  const [content, setContent] = useState("");
+  const [preview, setPreview] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("");
+
+  async function load(key: string) {
+    setLoading(true);
+    setStatus("");
+    const { data, error } = await supabase.from("learning_content").select("body").eq("key", key).maybeSingle();
+    if (error) { setStatus(`Failed to load: ${error.message}`); setLoading(false); return; }
+    setContent(data?.body ?? (key === "documentation" ? DEFAULT_DOCUMENTATION_MD : DEFAULT_GAME_GUIDE_MD));
+    setLoading(false);
+  }
+
+  useEffect(() => { load(which); }, [which]);
+
+  async function save() {
+    setStatus("Saving…");
+    const { error } = await supabase.from("learning_content").upsert(
+      { key: which, body: content, updated_at: new Date().toISOString() },
+      { onConflict: "key" }
+    );
+    setStatus(error ? `Failed: ${error.message}` : "Saved — live on the Learning tab now.");
+  }
+
+  function restoreDefault() {
+    setContent(which === "documentation" ? DEFAULT_DOCUMENTATION_MD : DEFAULT_GAME_GUIDE_MD);
+    setStatus("Reset to the shipped default — click Save to apply.");
+  }
+
+  return (
+    <div>
+      <div style={{ display: "inline-flex", gap: 4, background: "var(--faint)", borderRadius: 999, padding: 3, marginBottom: 14 }}>
+        {LEARNING_DOCS.map((d) => (
+          <button
+            key={d.key}
+            onClick={() => setWhich(d.key)}
+            style={{
+              border: "none", cursor: "pointer", borderRadius: 999,
+              padding: "5px 14px", fontSize: 12, fontWeight: 600,
+              background: which === d.key ? "var(--surface2)" : "transparent",
+              color: which === d.key ? "var(--text)" : "var(--muted)",
+            }}
+          >
+            {d.label}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
+      ) : (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <label style={{ fontSize: 11, color: "var(--muted)" }}>Markdown</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => setPreview((p) => !p)}>{preview ? "Edit" : "Preview"}</button>
+              <button className="btn btn-ghost btn-sm" onClick={restoreDefault}>Restore default</button>
+            </div>
+          </div>
+
+          {preview ? (
+            <div className="card" style={{ padding: 16, maxHeight: 480, overflowY: "auto" }}>
+              <Markdown text={content} />
+            </div>
+          ) : (
+            <textarea
+              className="input-field"
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              rows={20}
+              style={{ width: "100%", resize: "vertical", fontFamily: "monospace", fontSize: 12, lineHeight: 1.6 }}
+            />
+          )}
+
+          <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 6, lineHeight: 1.5 }}>
+            Supports headings (<code># ## ###</code>), <code>**bold**</code>, <code>*italic*</code>, <code>`code`</code>,
+            <code>[link](url)</code>, <code>- lists</code>, <code>1. numbered lists</code>, <code>&gt; quotes</code>,
+            <code>```code fences```</code>, and <code>---</code> rules.
+          </div>
+
+          <button className="btn btn-primary btn-sm" style={{ marginTop: 14 }} onClick={save}>Save</button>
+          {status && <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+        </>
+      )}
     </div>
   );
 }
@@ -2273,7 +2382,7 @@ function LabeledTextarea({
             cursor: cleaning ? "default" : "pointer", opacity: !(value ?? "").trim() ? 0.5 : 1,
           }}
         >
-          {cleaning ? "Cleaning…" : "✨ Clean up"}
+          {cleaning ? "Cleaning…" : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Sparkles size={13} /> Clean up</span>}
         </button>
       </div>
       <textarea

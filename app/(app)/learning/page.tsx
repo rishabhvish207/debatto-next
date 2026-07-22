@@ -12,10 +12,10 @@ import { DailyChallenge } from "@/components/learning/DailyChallenge";
 import { AiTutor } from "@/components/learning/AiTutor";
 import { GameGuide } from "@/components/learning/GameGuide";
 
-type Section = "docs" | "daily" | "tutor" | "guide";
+type Section = "daily" | "docs" | "guide" | "tutor";
 
 export default function LearningPage() {
-  const [section, setSection] = useState<Section>("docs");
+  const [section, setSection] = useState<Section>("daily");
 
   return (
     <div className="root" style={{ padding: "20px 16px", maxWidth: 720, margin: "0 auto" }}>
@@ -26,10 +26,10 @@ export default function LearningPage() {
 
       <div style={{ display: "flex", gap: 20, marginBottom: 20, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
         {([
-          ["docs", "Documentation"],
           ["daily", "Daily Challenge"],
-          ["tutor", "AI Tutor"],
+          ["docs", "Documentation"],
           ["guide", "Game Guide"],
+          ["tutor", "AI Tutor"],
         ] as const).map(([s, label]) => (
           <button
             key={s}
@@ -48,10 +48,10 @@ export default function LearningPage() {
         ))}
       </div>
 
-      {section === "docs" && <Documentation />}
       {section === "daily" && <DailyChallenge />}
-      {section === "tutor" && <AiTutor />}
+      {section === "docs" && <Documentation />}
       {section === "guide" && <GameGuide />}
+      {section === "tutor" && <AiTutor />}
     </div>
   );
 }

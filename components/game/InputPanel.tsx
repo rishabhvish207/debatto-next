@@ -1,4 +1,5 @@
 import React from "react";
+import { CornerDownLeft, ArrowRight } from "lucide-react";
 
 export function InputPanel({
   input, setInput, onSend, isEvaluating,
@@ -36,13 +37,14 @@ export function InputPanel({
 
       {/* Submit */}
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 11, color: "var(--muted)" }}>Ctrl + ↵</span>
+        <span style={{ fontSize: 11, color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: 3 }}>Ctrl + <CornerDownLeft size={12} /></span>
         <button
           className="btn btn-primary"
           disabled={!canSubmit}
           onClick={onSend}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
         >
-          Submit →
+          Submit <ArrowRight size={14} />
         </button>
       </div>
     </div>

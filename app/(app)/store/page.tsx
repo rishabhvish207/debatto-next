@@ -19,6 +19,7 @@
 import { useState, useRef, ReactNode } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
+import { AppIcon } from "@/components/ui/AppIcon";
 import type { StoreItemDef } from "@/config/Game";
 import type { StoreTheme } from "@/config/Themes";
 
@@ -68,7 +69,7 @@ export default function StorePage() {
     if (item.key === "insight_lens") {
       return (
         <ItemCard key={item.key} icon={item.icon} name={item.name} categoryLabel={ITEM_CATEGORIES.gear.label} description={item.description}
-          footer={inventory.insightLens ? <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600 }}>✓ Owned — permanent</span> : undefined}
+          footer={inventory.insightLens ? <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}><AppIcon token="✓" size={12} /> Owned — permanent</span> : undefined}
         >
           {!inventory.insightLens && (
             <BuyButton cost={item.baseCost} coins={profile.coins} onBuy={buyInsightLens}
@@ -180,7 +181,7 @@ export default function StorePage() {
           <p style={{ color: "var(--muted)", fontSize: 13 }}>Loading themes…</p>
         ) : activeThemes.length === 0 ? (
           <div className="card" style={{ padding: 24, textAlign: "center" }}>
-            <div style={{ fontSize: 28, marginBottom: 8 }}>🎨</div>
+            <div style={{ marginBottom: 8, display: "flex", justifyContent: "center" }}><AppIcon token="🎨" size={26} style={{ color: "var(--muted)" }} /></div>
             <div style={{ fontSize: 14, fontWeight: 600 }}>No themes available</div>
           </div>
         ) : (
@@ -259,9 +260,8 @@ function ItemCard({
         <div style={{
           width: 44, height: 44, borderRadius: 10, flexShrink: 0,
           background: "var(--faint)", display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 22,
         }}>
-          {icon}
+          <AppIcon token={icon} size={22} style={{ color: "var(--blue)" }} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
@@ -338,7 +338,7 @@ function ThemeCard({
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
             <span />
             {equipped ? (
-              <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600 }}>✓ Equipped</span>
+              <span style={{ fontSize: 12, color: "var(--green)", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}><AppIcon token="✓" size={12} /> Equipped</span>
             ) : owned ? (
               <button className="btn btn-primary btn-sm" onClick={onEquip}>Equip</button>
             ) : (

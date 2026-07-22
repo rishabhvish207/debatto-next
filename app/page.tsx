@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 import { getLandingBg } from "@/lib/landingBg";
 import { LandingThemeBg } from "@/components/shell/LandingThemeBg";
 
@@ -53,8 +54,8 @@ export default async function LandingPage() {
           <span style={{ color: "var(--text)", fontWeight: 600 }}>{lastWord}</span>
         </p>
 
-        <Link href="/hub" className="btn btn-primary btn-lg" style={{ width: "100%" }}>
-          Enter →
+        <Link href="/hub" className="btn btn-primary btn-lg" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+          Enter <ArrowRight size={16} />
         </Link>
       </div>
     </div>

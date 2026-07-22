@@ -1,9 +1,10 @@
 import React from "react";
+import { AppIcon } from "@/components/ui/AppIcon";
 
 // Shown during the player's turn so purchased items can actually be used
 // mid-match. Insight (formerly the "Hint" lifeline) lives here now too —
 // it's unlimited-use once the Insight Lens is owned from the Store, same
-// spyglass icon as the Store listing, so the two are visibly the same item.
+// icon as the Store listing, so the two are visibly the same item.
 export function ItemsBar({
   hasInsightLens, insightActive, onUseInsight,
   aceCards, confidencePills, revivalShots, onUseAce, onUseConfidence, onUseRevival,
@@ -33,8 +34,9 @@ export function ItemsBar({
         disabled={disabled || !hasInsightLens}
         onClick={onUseInsight}
         title={hasInsightLens ? "Analyse the opponent's argument for weak points" : "Buy the Insight Lens in the Store to unlock this"}
+        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
       >
-        {hasInsightLens ? "🔍 Insight" : "🔍 Insight 🔒"}
+        <AppIcon token="🔍" size={14} /> Insight {!hasInsightLens && <AppIcon token="🔒" size={12} />}
       </button>
 
       <button
@@ -42,8 +44,9 @@ export function ItemsBar({
         disabled={disabled || aceCards <= 0}
         onClick={onUseAce}
         title="Reveal 3 suggested responses"
+        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
       >
-        🂡 Ace Card ({aceCards})
+        <AppIcon token="🂡" size={14} /> Ace Card ({aceCards})
       </button>
 
       <button
@@ -51,8 +54,9 @@ export function ItemsBar({
         disabled={disabled || confidencePills <= 0}
         onClick={onUseConfidence}
         title="Restore +10 HP"
+        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
       >
-        💊 Confidence Pill ({confidencePills})
+        <AppIcon token="💊" size={14} /> Confidence Pill ({confidencePills})
       </button>
 
       <button
@@ -60,8 +64,9 @@ export function ItemsBar({
         disabled={disabled || revivalShots <= 0}
         onClick={onUseRevival}
         title="Restore HP to full"
+        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
       >
-        ⚡ Revival Shot ({revivalShots})
+        <AppIcon token="⚡" size={14} /> Revival Shot ({revivalShots})
       </button>
 
       {empty && (

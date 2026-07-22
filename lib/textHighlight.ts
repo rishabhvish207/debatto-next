@@ -70,6 +70,9 @@ export function setActiveMatch(container: HTMLElement, index: number): HTMLEleme
     if (i === index) {
       mark.style.background = "var(--amber)";
       mark.style.color = "var(--bg)";
+      // Keeps the match clear of the floating search bar + top bar above it,
+      // in case the browser resolves the scroll target near the top edge.
+      mark.style.scrollMarginTop = "130px";
       active = mark;
     } else {
       mark.style.background = "var(--amber-soft)";

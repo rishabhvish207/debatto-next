@@ -218,9 +218,9 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
               style={{ width: "100%" }}
               onClick={() => onSelect(selectedOpp?.id === focus.id ? null : focus)}
             >
-              selectedOpp?.id === focus.id
+              {selectedOpp?.id === focus.id
                 ? <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Debot selected <AppIcon token="✓" size={13} /></span>
-                : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Select this Debot <AppIcon token="→" size={13} /></span>
+                : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>Select this Debot <AppIcon token="→" size={13} /></span>}
             </button>
           )}
         </div>

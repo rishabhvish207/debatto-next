@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { Markdown } from "@/components/ui/Markdown";
-import { highlightMatches, clearHighlights } from "@/lib/textHighlight";
+import { highlightMatches, clearHighlights, setActiveMatch } from "@/lib/textHighlight";
 import { Search } from "lucide-react";
 import { DEFAULT_DOCUMENTATION_MD } from "@/config/LearningDefaults";
 
@@ -15,7 +15,20 @@ export function Documentation() {
   const [query, setQuery] = useState("");
   const [activeHit, setActiveHit] = useState(0);
   const [hitCount, setHitCount] = useState(0);
+  const [focused, setFocused] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Floating while there's something to search for (focused or has text),
+  // back to its normal spot in the layout once both are false.
+  const searchActive = focused || query.trim().length > 0;
+
+  // Sticks just under the fixed app top bar rather than a hardcoded value,
+  // so it still lines up if the top bar's height ever changes.
+  const [topOffset, setTopOffset] = useState(52);
+  useEffect(() => {
+    const topbar = document.querySelector(".app-topbar");
+    if (topbar) setTopOffset(topbar.getBoundingClientRect().height);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -42,8 +55,8 @@ export function Documentation() {
   }, [query, content]);
 
   useEffect(() => {
-    if (!hitCount) return;
-    const el = containerRef.current?.querySelectorAll(".md-hit")[activeHit] as HTMLElement | undefined;
+    if (!hitCount || !containerRef.current) return;
+    const el = setActiveMatch(containerRef.current, activeHit);
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [activeHit, hitCount]);
 
@@ -52,7 +65,19 @@ export function Documentation() {
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 18, alignItems: "center" }}>
+      <div
+        style={{
+          display: "flex", gap: 8, marginBottom: 18, alignItems: "center",
+          ...(searchActive
+            ? {
+                position: "sticky", top: topOffset, zIndex: 30,
+                background: "var(--bg)", marginLeft: -16, marginRight: -16,
+                padding: "10px 16px", borderBottom: "1px solid var(--border)",
+                boxShadow: "0 8px 16px -8px rgba(0,0,0,0.4)",
+              }
+            : {}),
+        }}
+      >
         <div style={{ position: "relative", flex: 1 }}>
           <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)", display: "flex" }}><Search size={14} /></span>
           <input
@@ -60,6 +85,8 @@ export function Documentation() {
             placeholder="Search this page…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             onKeyDown={(e) => { if (e.key === "Enter") nextHit(); }}
             style={{ width: "100%", paddingLeft: 34 }}
           />

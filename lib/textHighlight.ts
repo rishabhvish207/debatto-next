@@ -57,3 +57,24 @@ export function highlightMatches(container: HTMLElement, query: string): number 
 
   return count;
 }
+
+/**
+ * Marks the `index`-th <mark class="md-hit"> as the "current" match (brighter,
+ * inverted colors) and resets the rest to the plain highlight style. Returns
+ * the active element so callers can scrollIntoView it.
+ */
+export function setActiveMatch(container: HTMLElement, index: number): HTMLElement | undefined {
+  const marks = container.querySelectorAll<HTMLElement>("mark.md-hit");
+  let active: HTMLElement | undefined;
+  marks.forEach((mark, i) => {
+    if (i === index) {
+      mark.style.background = "var(--amber)";
+      mark.style.color = "var(--bg)";
+      active = mark;
+    } else {
+      mark.style.background = "var(--amber-soft)";
+      mark.style.color = "var(--amber)";
+    }
+  });
+  return active;
+}

@@ -540,6 +540,66 @@ async function readHistory(userId: string): Promise<Result> {
 }
 
 // ---------------------------------------------------------------------------
+// Online match history and Daily Challenge history — separate from the
+// debot `history` domain above (different tables, and both are login-only:
+// guests can't play online or have a persisted daily-attempt record).
+// Kept as dedicated exports rather than folded into the generic
+// saveGameData/loadGameData domain switch, same reasoning as pinned topics.
+// ---------------------------------------------------------------------------
+
+export async function loadOnlineHistory(user: AuthUser): Promise<Result> {
+  if (!user) return { ok: true, source: "local", data: [] };
+
+  const { data: matches, error } = await supabase
+    .from("online_matches")
+    .select("*, online_match_rounds(*)")
+    .or(`player_a.eq.${user.id},player_b.eq.${user.id}`)
+    .eq("status", "completed")
+    .order("completed_at", { ascending: false });
+  if (error) return { ok: false, source: "db", error };
+
+  // Resolve opponent names in a second pass rather than an embedded join —
+  // player_a/player_b both reference profiles(id), and PostgREST needs the
+  // actual FK constraint name to disambiguate a self-referencing double
+  // join like that, which we'd rather not hardcode here.
+  const opponentIds = Array.from(
+    new Set((matches || []).map((m: any) => (m.player_a === user.id ? m.player_b : m.player_a)).filter(Boolean))
+  );
+  let opponents: Record<string, { username: string | null; name: string }> = {};
+  if (opponentIds.length) {
+    const { data: profs } = await supabase.from("profiles").select("id, username, name").in("id", opponentIds);
+    opponents = Object.fromEntries((profs || []).map((p: any) => [p.id, { username: p.username, name: p.name }]));
+  }
+
+  const enriched = (matches || []).map((m: any) => {
+    const isA = m.player_a === user.id;
+    const oppId = isA ? m.player_b : m.player_a;
+    const opp = oppId ? opponents[oppId] : null;
+    return {
+      ...m,
+      is_player_a: isA,
+      opponent_name: opp?.username || opp?.name || "Unknown",
+      my_score: isA ? m.player_a_score : m.player_b_score,
+      opponent_score: isA ? m.player_b_score : m.player_a_score,
+      my_prestige_delta: isA ? m.player_a_prestige_delta : m.player_b_prestige_delta,
+    };
+  });
+
+  return { ok: true, source: "db", data: enriched };
+}
+
+export async function loadDailyHistory(user: AuthUser): Promise<Result> {
+  if (!user) return { ok: true, source: "local", data: [] };
+  const { data, error } = await supabase
+    .from("daily_challenge_attempts")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("challenge_date", { ascending: false });
+  if (error) return { ok: false, source: "db", error };
+  return { ok: true, source: "db", data };
+}
+
+// ---------------------------------------------------------------------------
 // Topic pinning — a per-user preference layered on top of any topic (system
 // or their own custom one). Kept as dedicated functions rather than forced
 // into the generic saveGameData/loadGameData domain switch above, since

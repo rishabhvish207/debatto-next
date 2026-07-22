@@ -2,18 +2,17 @@ import Link from "next/link";
 import { AppIcon } from "@/components/ui/AppIcon";
 
 const CARDS = [
-  { href: "/play", label: "Play", desc: "Debots, online & friend matches", icon: "⚔", style: "hub-card-primary" },
-  { href: "/learning", label: "Learn", desc: "Fallacies & technique", icon: "📚", style: "hub-card-secondary" },
-  { href: "/store", label: "Store", desc: "Themes & customization", icon: "🛍", style: "hub-card-secondary" },
-  { href: "/achievements", label: "Achievements", desc: "Track your progress", icon: "🏅", style: "hub-card-secondary" },
+  { href: "/offline", label: "Debots", desc: "Debate an AI opponent", icon: "⚔", style: "hub-card-primary" },
+  { href: "/online/random", label: "Online", desc: "Random matchmaking", icon: "🌐", style: "hub-card-primary" },
+  { href: "/online/friends", label: "Friend Match", desc: "Challenge a friend directly", icon: "🤝", style: "hub-card-secondary" },
 ];
 
-export default function HubPage() {
+export default function PlayPage() {
   return (
     <div style={{ padding: "32px 16px", maxWidth: 520, margin: "0 auto" }}>
-      <h1 className="heading" style={{ fontSize: 24, marginBottom: 4, textAlign: "center" }}>Where to?</h1>
+      <h1 className="heading" style={{ fontSize: 24, marginBottom: 4, textAlign: "center" }}>Play</h1>
       <p style={{ fontSize: 13, color: "var(--muted)", textAlign: "center", marginBottom: 28 }}>
-        Pick a mode to get started.
+        Pick who you want to debate.
       </p>
 
       <div className="hub-grid">

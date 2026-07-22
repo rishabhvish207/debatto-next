@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { Markdown } from "@/components/ui/Markdown";
+import { highlightMatches, clearHighlights } from "@/lib/textHighlight";
 import { Search } from "lucide-react";
 import { DEFAULT_DOCUMENTATION_MD } from "@/config/LearningDefaults";
 
@@ -13,6 +14,7 @@ export function Documentation() {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [activeHit, setActiveHit] = useState(0);
+  const [hitCount, setHitCount] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -28,10 +30,13 @@ export function Documentation() {
     })();
   }, []);
 
-  const [hitCount, setHitCount] = useState(0);
-
+  // Highlighting is a DOM pass over whatever react-markdown actually
+  // rendered, not part of the markdown parsing itself — see
+  // lib/textHighlight.ts for why.
   useEffect(() => {
-    const count = containerRef.current?.querySelectorAll(".md-hit").length || 0;
+    if (!containerRef.current) { return; }
+    if (!query.trim()) { clearHighlights(containerRef.current); setHitCount(0); setActiveHit(0); return; }
+    const count = highlightMatches(containerRef.current, query);
     setHitCount(count);
     setActiveHit(0);
   }, [query, content]);
@@ -72,7 +77,7 @@ export function Documentation() {
         <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
       ) : (
         <div ref={containerRef} className="card" style={{ padding: 20 }}>
-          <Markdown text={content} query={query} />
+          <Markdown text={content} />
         </div>
       )}
     </div>

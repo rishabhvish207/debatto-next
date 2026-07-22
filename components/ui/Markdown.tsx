@@ -1,239 +1,100 @@
 "use client";
 
 import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-// A small, dependency-free markdown renderer — this project has no network
-// access to add a real markdown package mid-session, and honestly a full
-// CommonMark implementation is overkill for admin-authored docs. Supports:
-// # .. ###### headings, **bold**, *italic*/_italic_, `code`, [text](url),
-// - / * unordered lists, 1. ordered lists, > blockquotes, ``` code fences,
-// --- horizontal rules, and blank-line-separated paragraphs. Anything else
-// just renders as plain text — good enough for the two admin-editable docs
-// this is used for (Documentation, Game Guide).
+// A real CommonMark + GitHub-Flavored-Markdown renderer (tables, task
+// lists, strikethrough, images, footnotes, autolinks — everything a tool
+// like Obsidian's preview supports) via react-markdown + remark-gfm,
+// themed to match the app instead of react-markdown's unstyled defaults.
+// Search-term highlighting is handled separately, as a DOM pass after
+// render (see lib/textHighlight.ts) — that's independent of whichever
+// markdown engine is underneath, so switching engines never breaks it.
 
-type Block =
-  | { type: "heading"; level: number; text: string }
-  | { type: "hr" }
-  | { type: "code"; lang: string; code: string }
-  | { type: "ul"; items: string[] }
-  | { type: "ol"; items: string[] }
-  | { type: "quote"; lines: string[] }
-  | { type: "p"; text: string };
-
-function parseBlocks(md: string): Block[] {
-  const lines = md.replace(/\r\n/g, "\n").split("\n");
-  const blocks: Block[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    if (line.trim() === "") { i++; continue; }
-
-    // Code fence
-    if (line.trim().startsWith("```")) {
-      const lang = line.trim().slice(3).trim();
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].trim().startsWith("```")) { codeLines.push(lines[i]); i++; }
-      i++; // skip closing fence
-      blocks.push({ type: "code", lang, code: codeLines.join("\n") });
-      continue;
-    }
-
-    // Heading
-    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
-    if (headingMatch) {
-      blocks.push({ type: "heading", level: headingMatch[1].length, text: headingMatch[2].trim() });
-      i++;
-      continue;
-    }
-
-    // Horizontal rule
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line.trim())) {
-      blocks.push({ type: "hr" });
-      i++;
-      continue;
-    }
-
-    // Blockquote
-    if (line.trim().startsWith(">")) {
-      const quoteLines: string[] = [];
-      while (i < lines.length && lines[i].trim().startsWith(">")) {
-        quoteLines.push(lines[i].trim().replace(/^>\s?/, ""));
-        i++;
-      }
-      blocks.push({ type: "quote", lines: quoteLines });
-      continue;
-    }
-
-    // Unordered list
-    if (/^[-*]\s+/.test(line.trim())) {
-      const items: string[] = [];
-      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
-        items.push(lines[i].trim().replace(/^[-*]\s+/, ""));
-        i++;
-      }
-      blocks.push({ type: "ul", items });
-      continue;
-    }
-
-    // Ordered list
-    if (/^\d+\.\s+/.test(line.trim())) {
-      const items: string[] = [];
-      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
-        items.push(lines[i].trim().replace(/^\d+\.\s+/, ""));
-        i++;
-      }
-      blocks.push({ type: "ol", items });
-      continue;
-    }
-
-    // Paragraph — consume until a blank line or the start of another block type
-    const paraLines: string[] = [line];
-    i++;
-    while (
-      i < lines.length &&
-      lines[i].trim() !== "" &&
-      !/^(#{1,6})\s+/.test(lines[i]) &&
-      !lines[i].trim().startsWith("```") &&
-      !lines[i].trim().startsWith(">") &&
-      !/^[-*]\s+/.test(lines[i].trim()) &&
-      !/^\d+\.\s+/.test(lines[i].trim()) &&
-      !/^(-{3,}|\*{3,}|_{3,})$/.test(lines[i].trim())
-    ) {
-      paraLines.push(lines[i]);
-      i++;
-    }
-    blocks.push({ type: "p", text: paraLines.join(" ") });
-  }
-
-  return blocks;
-}
-
-let hitCounter = 0;
-
-// Splits `text` on **bold**, *italic*/_italic_, `code`, and [text](url),
-// rendering each as the matching element; plain text in between (and any
-// occurrence of `query`, if given) is wrapped for search highlighting.
-function renderInline(text: string, keyPrefix: string, query?: string): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  const re = /(\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|`[^`]+`|\[[^\]]+\]\([^)]+\))/g;
-  let lastIndex = 0;
-  let m: RegExpExecArray | null;
-  let i = 0;
-
-  function pushPlain(chunk: string) {
-    if (!chunk) return;
-    if (!query || !query.trim()) { nodes.push(chunk); return; }
-    const q = query.trim();
-    const lower = chunk.toLowerCase();
-    const ql = q.toLowerCase();
-    let pos = 0;
-    let idx = lower.indexOf(ql, pos);
-    if (idx === -1) { nodes.push(chunk); return; }
-    while (idx !== -1) {
-      if (idx > pos) nodes.push(chunk.slice(pos, idx));
-      nodes.push(
-        <mark key={`${keyPrefix}-hit-${hitCounter++}`} className="md-hit" style={{ background: "var(--amber-soft)", color: "var(--amber)", borderRadius: 3, padding: "0 1px" }}>
-          {chunk.slice(idx, idx + q.length)}
-        </mark>
-      );
-      pos = idx + q.length;
-      idx = lower.indexOf(ql, pos);
-    }
-    if (pos < chunk.length) nodes.push(chunk.slice(pos));
-  }
-
-  while ((m = re.exec(text))) {
-    if (m.index > lastIndex) pushPlain(text.slice(lastIndex, m.index));
-    const token = m[0];
-    if (token.startsWith("**")) {
-      nodes.push(<strong key={`${keyPrefix}-${i++}`}>{renderInline(token.slice(2, -2), `${keyPrefix}-b${i}`, query)}</strong>);
-    } else if (token.startsWith("`")) {
-      nodes.push(<code key={`${keyPrefix}-${i++}`} style={{ background: "var(--faint)", padding: "1px 5px", borderRadius: 4, fontSize: "0.92em" }}>{token.slice(1, -1)}</code>);
-    } else if (token.startsWith("[")) {
-      const linkMatch = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-      if (linkMatch) {
-        nodes.push(<a key={`${keyPrefix}-${i++}`} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" style={{ color: "var(--blue)" }}>{linkMatch[1]}</a>);
-      } else {
-        pushPlain(token);
-      }
-    } else {
-      nodes.push(<em key={`${keyPrefix}-${i++}`}>{renderInline(token.slice(1, -1), `${keyPrefix}-i${i}`, query)}</em>);
-    }
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < text.length) pushPlain(text.slice(lastIndex));
-  return nodes;
-}
-
-const HEADING_SIZES: Record<number, number> = { 1: 24, 2: 19, 3: 16, 4: 14, 5: 13, 6: 12 };
-
-export function Markdown({ text, query }: { text: string; query?: string }) {
-  const blocks = React.useMemo(() => parseBlocks(text || ""), [text]);
-
+export function Markdown({ text }: { text: string }) {
   return (
-    <div style={{ fontSize: 13.5, color: "var(--text)", lineHeight: 1.75 }}>
-      {blocks.map((b, idx) => {
-        const key = `blk-${idx}`;
-        switch (b.type) {
-          case "heading":
+    <div className="md-body" style={{ fontSize: 13.5, color: "var(--text)", lineHeight: 1.75 }}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => (
+            <div style={{ fontSize: 24, fontWeight: 700, color: "var(--amber)", marginTop: 0, marginBottom: 12, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+              {children}
+            </div>
+          ),
+          h2: ({ children }) => (
+            <div style={{ fontSize: 19, fontWeight: 700, color: "var(--amber)", marginTop: 26, marginBottom: 10 }}>
+              {children}
+            </div>
+          ),
+          h3: ({ children }) => (
+            <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", marginTop: 18, marginBottom: 8 }}>
+              {children}
+            </div>
+          ),
+          h4: ({ children }) => <div style={{ fontSize: 14, fontWeight: 700, marginTop: 14, marginBottom: 6 }}>{children}</div>,
+          h5: ({ children }) => <div style={{ fontSize: 13, fontWeight: 700, marginTop: 12, marginBottom: 6 }}>{children}</div>,
+          h6: ({ children }) => <div style={{ fontSize: 12, fontWeight: 700, marginTop: 10, marginBottom: 6, color: "var(--muted)" }}>{children}</div>,
+          p: ({ children }) => <p style={{ margin: "0 0 12px", color: "var(--muted)" }}>{children}</p>,
+          strong: ({ children }) => <strong style={{ color: "var(--text)", fontWeight: 700 }}>{children}</strong>,
+          em: ({ children }) => <em>{children}</em>,
+          del: ({ children }) => <del style={{ opacity: 0.65 }}>{children}</del>,
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: "var(--blue)" }}>{children}</a>
+          ),
+          hr: () => <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "18px 0" }} />,
+          ul: ({ children }) => <ul style={{ margin: "0 0 12px", paddingLeft: 20 }}>{children}</ul>,
+          ol: ({ children }) => <ol style={{ margin: "0 0 12px", paddingLeft: 20 }}>{children}</ol>,
+          li: ({ children }) => <li style={{ marginBottom: 5, color: "var(--muted)" }}>{children}</li>,
+          blockquote: ({ children }) => (
+            <div style={{ borderLeft: "3px solid var(--blue-soft)", paddingLeft: 12, marginBottom: 12, color: "var(--muted)", fontStyle: "italic" }}>
+              {children}
+            </div>
+          ),
+          code: ({ className, children, ...props }: any) => {
+            const codeText = String(children).replace(/\n$/, "");
+            // react-markdown v9 no longer passes an `inline` flag — a
+            // className only shows up when the fence has a language tag
+            // (```js), so a language-less multi-line block needs the
+            // newline check too, or it'd wrongly get pill-style inline
+            // code styling instead of pre-wrap block styling.
+            const isBlock = className?.includes("language-") || codeText.includes("\n");
+            if (isBlock) {
+              return <code className={className} style={{ fontSize: 12, fontFamily: "monospace", color: "var(--text)", whiteSpace: "pre" }} {...props}>{children}</code>;
+            }
             return (
-              <div
-                key={key}
-                style={{
-                  fontSize: HEADING_SIZES[b.level] || 13,
-                  fontWeight: 700,
-                  color: b.level <= 2 ? "var(--amber)" : "var(--text)",
-                  marginTop: idx === 0 ? 0 : b.level <= 2 ? 26 : 18,
-                  marginBottom: 8,
-                  paddingBottom: b.level === 1 ? 8 : 0,
-                  borderBottom: b.level === 1 ? "1px solid var(--border)" : "none",
-                }}
-              >
-                {renderInline(b.text, key, query)}
-              </div>
+              <code style={{ background: "var(--faint)", padding: "1px 5px", borderRadius: 4, fontSize: "0.92em" }} {...props}>
+                {children}
+              </code>
             );
-          case "hr":
-            return <hr key={key} style={{ border: "none", borderTop: "1px solid var(--border)", margin: "18px 0" }} />;
-          case "code":
-            return (
-              <pre key={key} className="card" style={{ padding: 12, overflowX: "auto", marginBottom: 12, background: "var(--faint)" }}>
-                <code style={{ fontSize: 12, fontFamily: "monospace", color: "var(--text)", whiteSpace: "pre" }}>{b.code}</code>
-              </pre>
-            );
-          case "ul":
-            return (
-              <ul key={key} style={{ margin: "0 0 12px", paddingLeft: 20 }}>
-                {b.items.map((it, i2) => (
-                  <li key={i2} style={{ marginBottom: 5, color: "var(--muted)" }}>{renderInline(it, `${key}-${i2}`, query)}</li>
-                ))}
-              </ul>
-            );
-          case "ol":
-            return (
-              <ol key={key} style={{ margin: "0 0 12px", paddingLeft: 20 }}>
-                {b.items.map((it, i2) => (
-                  <li key={i2} style={{ marginBottom: 5, color: "var(--muted)" }}>{renderInline(it, `${key}-${i2}`, query)}</li>
-                ))}
-              </ol>
-            );
-          case "quote":
-            return (
-              <div key={key} style={{ borderLeft: "3px solid var(--blue-soft)", paddingLeft: 12, marginBottom: 12, color: "var(--muted)", fontStyle: "italic" }}>
-                {b.lines.map((l, i2) => <div key={i2}>{renderInline(l, `${key}-${i2}`, query)}</div>)}
-              </div>
-            );
-          case "p":
-          default:
-            return (
-              <p key={key} style={{ margin: "0 0 12px", color: "var(--muted)" }}>
-                {renderInline(b.text, key, query)}
-              </p>
-            );
-        }
-      })}
+          },
+          pre: ({ children }) => (
+            <pre className="card" style={{ padding: 12, overflowX: "auto", marginBottom: 12, background: "var(--faint)" }}>
+              {children}
+            </pre>
+          ),
+          img: ({ src, alt }) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={src} alt={alt || ""} style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid var(--border)", margin: "8px 0" }} />
+          ),
+          table: ({ children }) => (
+            <div style={{ overflowX: "auto", marginBottom: 12 }}>
+              <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead style={{ background: "var(--faint)" }}>{children}</thead>,
+          th: ({ children }) => (
+            <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "2px solid var(--border)", color: "var(--text)", fontWeight: 700 }}>{children}</th>
+          ),
+          td: ({ children }) => <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--border)", color: "var(--muted)" }}>{children}</td>,
+          input: ({ checked, ...props }: any) => (
+            <input type="checkbox" checked={!!checked} disabled style={{ marginRight: 6, accentColor: "var(--blue)" }} {...props} />
+          ),
+        }}
+      >
+        {text || ""}
+      </ReactMarkdown>
     </div>
   );
 }

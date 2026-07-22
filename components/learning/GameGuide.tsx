@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { Markdown } from "@/components/ui/Markdown";
+import { highlightMatches, clearHighlights } from "@/lib/textHighlight";
 import { Search } from "lucide-react";
 import { DEFAULT_GAME_GUIDE_MD } from "@/config/LearningDefaults";
 
@@ -30,7 +31,9 @@ export function GameGuide() {
   }, []);
 
   useEffect(() => {
-    const count = containerRef.current?.querySelectorAll(".md-hit").length || 0;
+    if (!containerRef.current) { return; }
+    if (!query.trim()) { clearHighlights(containerRef.current); setHitCount(0); setActiveHit(0); return; }
+    const count = highlightMatches(containerRef.current, query);
     setHitCount(count);
     setActiveHit(0);
   }, [query, content]);
@@ -71,7 +74,7 @@ export function GameGuide() {
         <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
       ) : (
         <div ref={containerRef} className="card" style={{ padding: 20 }}>
-          <Markdown text={content} query={query} />
+          <Markdown text={content} />
         </div>
       )}
     </div>

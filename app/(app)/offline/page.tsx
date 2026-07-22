@@ -803,7 +803,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
 
         <div className="card" style={{ padding: "10px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 7 }}>
-            <button className="btn btn-ghost btn-sm" style={{ fontSize: 12 }} onClick={() => requestNavigation(() => setPage("setup"))} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><AppIcon token="←" size={13} /> Exit</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => requestNavigation(() => setPage("setup"))} style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}><AppIcon token="←" size={13} /> Exit</button>
             <div style={{ fontSize: 12, color: "var(--muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{activeTopic?.text}"</div>
             <span className="badge" style={{ background: "var(--faint)", color: "var(--muted)" }}>R {round}/{rounds}</span>
             <span className="badge" style={{ background: "var(--amber-soft)", color: "var(--amber)" }}><DebucksIcon style={{ marginRight: 4 }} />{profile.coins}</span>
@@ -884,7 +884,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
               </div>
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", fontStyle: "italic", marginBottom: 14 }}>"{lastEval.critique}"</div>
-            <button className="btn btn-primary" style={{ width: "100%" }} onClick={triggerOpponentCounter} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>See Debot's Counter <AppIcon token="→" size={15} /></button>
+            <button className="btn btn-primary" onClick={triggerOpponentCounter} style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>See Debot's Counter <AppIcon token="→" size={15} /></button>
           </div>
         )}
 
@@ -899,7 +899,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
                </div>
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14 }}>The debot fired back, dealing damage to your HP.</div>
-            <button className="btn btn-primary" style={{ width: "100%" }} onClick={advanceRound} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>Next Round <AppIcon token="→" size={15} /></button>
+            <button className="btn btn-primary" onClick={advanceRound} style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 }}>Next Round <AppIcon token="→" size={15} /></button>
           </div>
         )}
 

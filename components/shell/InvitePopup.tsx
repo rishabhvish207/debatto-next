@@ -26,6 +26,7 @@ export function InvitePopup() {
   const router = useRouter();
   const [hostName, setHostName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (!incomingInvite) return;
@@ -43,10 +44,16 @@ export function InvitePopup() {
   async function respond(accept: boolean) {
     if (!incomingInvite) return;
     setBusy(true);
+    setError("");
     const result = await respondToInvite(incomingInvite, accept, onlineUserIds);
     setBusy(false);
+    if (!result.ok) {
+      console.error(result.error);
+      setError("Something went wrong — see console for details.");
+      return; // keep the popup open so it's not just silently gone
+    }
     setIncomingInvite(null);
-    if (accept && result.ok && result.matchId) router.push(`/online/match/${result.matchId}`);
+    if (accept && result.matchId) router.push(`/online/match/${result.matchId}`);
   }
 
   return (
@@ -72,6 +79,7 @@ export function InvitePopup() {
           <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => respond(true)} style={{ flex: 1 }}>Accept</button>
           <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => respond(false)} style={{ flex: 1 }}>Decline</button>
         </div>
+        {error && <div style={{ fontSize: 11, color: "var(--red)", marginTop: 8 }}>{error}</div>}
       </div>
     </div>
   );

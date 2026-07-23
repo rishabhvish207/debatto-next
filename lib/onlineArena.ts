@@ -61,48 +61,11 @@ export async function scorePvpRound(
 }
 
 // Standard Elo, K=32, floor 100 (per the spec this was designed against).
-// score is 1 for a win, 0.5 for a draw, 0 for a loss.
-function eloDelta(myRating: number, oppRating: number, score: number): number {
-  const K = 32;
-  const expected = 1 / (1 + Math.pow(10, (oppRating - myRating) / 400));
-  return Math.round(K * (score - expected));
-}
-
+// The actual computation lives server-side now — see apply_match_completion
+// in the SQL migrations — since a client writing another player's
+// prestige, or reporting its own match's final score, is the wrong shape
+// regardless of RLS. This just calls that RPC.
 export async function finalizeMatchIfComplete(matchId: string): Promise<void> {
-  const { data: match } = await supabase.from("online_matches").select("*").eq("id", matchId).maybeSingle();
-  if (!match || match.status === "completed") return;
-
-  const { data: rounds } = await supabase.from("online_match_rounds").select("*").eq("match_id", matchId);
-  const completedRounds = (rounds || []).filter((r: any) => r.player_a_gain !== null && r.player_b_gain !== null);
-  if (completedRounds.length < match.rounds_total) return;
-
-  const aScore = completedRounds.reduce((sum: number, r: any) => sum + Math.max(0, (r.player_a_gain || 0) - (r.player_a_penalty || 0)), 0);
-  const bScore = completedRounds.reduce((sum: number, r: any) => sum + Math.max(0, (r.player_b_gain || 0) - (r.player_b_penalty || 0)), 0);
-  const result = aScore === bScore ? "draw" : aScore > bScore ? "a_win" : "b_win";
-
-  const update: Record<string, any> = {
-    status: "completed",
-    completed_at: new Date().toISOString(),
-    player_a_score: aScore,
-    player_b_score: bScore,
-    result,
-  };
-
-  if (match.mode === "random") {
-    const { data: profs } = await supabase.from("profiles").select("id, prestige").in("id", [match.player_a, match.player_b]);
-    const aPrestige = profs?.find((p: any) => p.id === match.player_a)?.prestige ?? 500;
-    const bPrestige = profs?.find((p: any) => p.id === match.player_b)?.prestige ?? 500;
-    const aOutcome = result === "draw" ? 0.5 : result === "a_win" ? 1 : 0;
-    const bOutcome = 1 - aOutcome;
-    const aDelta = eloDelta(aPrestige, bPrestige, aOutcome);
-    const bDelta = eloDelta(bPrestige, aPrestige, bOutcome);
-
-    update.player_a_prestige_delta = aDelta;
-    update.player_b_prestige_delta = bDelta;
-
-    await supabase.from("profiles").update({ prestige: Math.max(100, aPrestige + aDelta) }).eq("id", match.player_a);
-    await supabase.from("profiles").update({ prestige: Math.max(100, bPrestige + bDelta) }).eq("id", match.player_b);
-  }
-
-  await supabase.from("online_matches").update(update).eq("id", matchId);
+  const { error } = await supabase.rpc("apply_match_completion", { p_match_id: matchId });
+  if (error) console.error("apply_match_completion failed:", error);
 }

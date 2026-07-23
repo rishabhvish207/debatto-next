@@ -28,6 +28,7 @@ export default function NotificationsPage() {
   const [people, setPeople] = useState<Record<string, ProfileLite>>({});
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState("");
 
   async function refresh() {
     if (!user) { setLoading(false); return; }
@@ -73,6 +74,7 @@ export default function NotificationsPage() {
     if (waiting) {
       finalizeInviteIntoMatch(waiting).then((res) => {
         if (res.ok && res.matchId) router.push(`/online/match/${res.matchId}`);
+        else if (!res.ok) console.error(res.error);
       });
     }
   }, [onlineUserIds, incoming]);
@@ -92,9 +94,15 @@ export default function NotificationsPage() {
 
   async function respond(invite: MatchInvite, accept: boolean) {
     setBusyId(invite.id);
+    setActionError("");
     const result = await respondToInvite(invite, accept, onlineUserIds);
     setBusyId(null);
-    if (accept && result.ok && result.matchId) { router.push(`/online/match/${result.matchId}`); return; }
+    if (!result.ok) {
+      console.error(result.error);
+      setActionError("Something went wrong — see console for details.");
+      return;
+    }
+    if (accept && result.matchId) { router.push(`/online/match/${result.matchId}`); return; }
     refresh();
   }
 
@@ -130,6 +138,7 @@ export default function NotificationsPage() {
   return (
     <div className="root" style={{ padding: "20px 16px", maxWidth: 640, margin: "0 auto" }}>
       <h2 className="heading" style={{ fontSize: 22, marginBottom: 16 }}>Notifications</h2>
+      {actionError && <div style={{ fontSize: 12, color: "var(--red)", marginBottom: 12 }}>{actionError}</div>}
 
       {loading ? (
         <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>

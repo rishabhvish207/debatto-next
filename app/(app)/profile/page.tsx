@@ -1,10 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, ChangeEvent } from "react";
 import { useGame } from "@/contexts/GameContext";
+import { createClient } from "@/utils/supabase/client";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
 import { displayName, tierColor } from "@/config/Achievements";
 import { AppIcon } from "@/components/ui/AppIcon";
+
+const supabase = createClient();
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
 export default function ProfilePage() {
   const { user, profile, upProfile, uploadAvatar, removeAvatar, signOut, signInWithGoogle, achievements, unlockedAchievementIds } = useGame();
@@ -41,10 +45,53 @@ export default function ProfilePage() {
   const [avatarBusy, setAvatarBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── USERNAME: required for friend search — separate flow from the rest of
+  // the profile form since it needs a live uniqueness check against the DB,
+  // not just local validation, and a failed save here shouldn't touch `name`/`bio`.
+  const [usernameInput, setUsernameInput] = useState(profile?.username || "");
+  const [usernameCheck, setUsernameCheck] = useState<"idle" | "checking" | "available" | "taken" | "invalid">("idle");
+  const [usernameSaving, setUsernameSaving] = useState(false);
+  const [usernameError, setUsernameError] = useState("");
+  const usernameCheckRef = useRef(0);
+
+  useEffect(() => {
+    const trimmed = usernameInput.trim();
+    if (!user || trimmed === (profile?.username || "")) { setUsernameCheck("idle"); return; }
+    if (!USERNAME_RE.test(trimmed)) { setUsernameCheck("invalid"); return; }
+    setUsernameCheck("checking");
+    const myCheck = ++usernameCheckRef.current;
+    const t = setTimeout(async () => {
+      const { data } = await supabase.from("profiles").select("id").ilike("username", trimmed).neq("id", user.id).maybeSingle();
+      if (usernameCheckRef.current !== myCheck) return; // a newer keystroke already superseded this check
+      setUsernameCheck(data ? "taken" : "available");
+    }, 400);
+    return () => clearTimeout(t);
+  }, [usernameInput, user, profile?.username]);
+
+  async function saveUsername() {
+    if (!user || usernameCheck !== "available") return;
+    setUsernameSaving(true);
+    setUsernameError("");
+    const trimmed = usernameInput.trim();
+    const { error } = await supabase.from("profiles").update({ username: trimmed }).eq("id", user.id);
+    setUsernameSaving(false);
+    if (error) {
+      // 23505 = unique_violation — someone else grabbed it between the
+      // availability check and this save landing.
+      setUsernameError(error.code === "23505" ? "That username was just taken — try another." : "Failed to save username.");
+      return;
+    }
+    upProfile({ username: trimmed });
+    setUsernameCheck("idle");
+  }
+
   function startEditing() {
     setName(profile?.name || "");
     setBio(profile?.bio || "");
     setAvatarStatus("");
+    setUsernameInput(profile?.username || "");
+    setUsernameCheck("idle");
+    setUsernameError("");
     setEditing(true);
   }
 
@@ -58,7 +105,7 @@ export default function ProfilePage() {
     setEditing(false);
   }
 
-  async function handleAvatarPick(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleAvatarPick(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
@@ -153,6 +200,15 @@ export default function ProfilePage() {
                 ID: {profile?.player_id || "…"}
               </div>
             )}
+            {user && (
+              profile?.username ? (
+                <div style={{ fontSize: 12, color: "var(--blue)" }}>@{profile.username}</div>
+              ) : (
+                <div style={{ fontSize: 11, color: "var(--amber)", marginTop: 2 }}>
+                  Set a username to add friends →
+                </div>
+              )
+            )}
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
               {user ? "Signed in" : "Playing as Guest"}
               {profile?.is_admin && <span style={{ color: "var(--amber)", marginLeft: 6 }}>· Admin</span>}
@@ -197,6 +253,38 @@ export default function ProfilePage() {
         <div className="card" style={{ padding: 16 }}>
           <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Display name</label>
           <input className="input-field" value={name} onChange={(e) => setName(e.target.value)} style={{ marginBottom: 14 }} />
+
+          {user && (
+            <>
+              <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>
+                Username <span style={{ color: "var(--muted)" }}>(for friend search — 3-20 letters, numbers, underscores)</span>
+              </label>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                <input
+                  className="input-field"
+                  value={usernameInput}
+                  onChange={(e) => setUsernameInput(e.target.value)}
+                  placeholder={profile?.username ? undefined : "choose_a_username"}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={usernameCheck !== "available" || usernameSaving}
+                  onClick={saveUsername}
+                >
+                  {usernameSaving ? "Saving…" : "Set"}
+                </button>
+              </div>
+              <div style={{ fontSize: 11, marginBottom: 14, color: usernameCheck === "taken" || usernameCheck === "invalid" ? "var(--red)" : usernameCheck === "available" ? "var(--blue)" : "var(--muted)" }}>
+                {usernameError ? usernameError
+                  : usernameCheck === "checking" ? "Checking…"
+                  : usernameCheck === "available" ? "Available"
+                  : usernameCheck === "taken" ? "Already taken"
+                  : usernameCheck === "invalid" ? "3-20 letters, numbers, or underscores only"
+                  : "\u00A0"}
+              </div>
+            </>
+          )}
 
           <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Bio</label>
           <textarea

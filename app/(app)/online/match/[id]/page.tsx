@@ -53,7 +53,8 @@ export default function OnlineMatchPage() {
     const { data: r } = await supabase.from("online_match_rounds").select("*").eq("match_id", id).order("round_number", { ascending: true });
     setRounds(r || []);
 
-    const { data: profs } = await supabase.from("public_profiles").select("id, name, username").in("id", [m.player_a, m.player_b]);
+    const { data: profs, error: profsError } = await supabase.from("public_profiles").select("id, name, username").in("id", [m.player_a, m.player_b]);
+    if (profsError) console.error(profsError);
     setNames(Object.fromEntries((profs || []).map((p: any) => [p.id, p.username ? `@${p.username}` : p.name])));
     setLoading(false);
   }

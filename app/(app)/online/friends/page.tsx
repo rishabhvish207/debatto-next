@@ -73,7 +73,8 @@ export default function OnlineFriendsPage() {
     const otherIds = Array.from(new Set((data || []).map((f: any) => (f.requester_id === user.id ? f.addressee_id : f.requester_id))));
     let others: Record<string, ProfileLite> = {};
     if (otherIds.length) {
-      const { data: profs } = await supabase.from("public_profiles").select("id, name, username, avatar_url").in("id", otherIds);
+      const { data: profs, error: profsError } = await supabase.from("public_profiles").select("id, name, username, avatar_url").in("id", otherIds);
+      if (profsError) console.error(profsError);
       others = Object.fromEntries((profs || []).map((p: any) => [p.id, p]));
     }
 
@@ -86,16 +87,24 @@ export default function OnlineFriendsPage() {
   // Debounced username search, excluding people already connected in any way.
   useEffect(() => {
     const trimmed = query.trim();
-    if (!user || trimmed.length < 2) { setResults([]); return; }
+    if (!user || trimmed.length < 2) { setResults([]); setActionError(""); return; }
     setSearching(true);
     const t = setTimeout(async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("public_profiles")
         .select("id, name, username, avatar_url")
         .ilike("username", `%${trimmed}%`)
         .neq("id", user.id)
         .not("username", "is", null)
         .limit(10);
+      if (error) {
+        console.error(error);
+        setActionError("Search failed — see console for details.");
+        setResults([]);
+        setSearching(false);
+        return;
+      }
+      setActionError("");
       const knownIds = new Set(rows.map((r) => r.other?.id));
       setResults((data || []).filter((p: any) => !knownIds.has(p.id)));
       setSearching(false);

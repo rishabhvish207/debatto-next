@@ -29,7 +29,7 @@ export function InvitePopup() {
 
   useEffect(() => {
     if (!incomingInvite) return;
-    supabase.from("profiles").select("name, username").eq("id", incomingInvite.host_id).maybeSingle()
+    supabase.from("public_profiles").select("name, username").eq("id", incomingInvite.host_id).maybeSingle()
       .then(({ data }) => setHostName(data?.username ? `@${data.username}` : data?.name || "A friend"));
   }, [incomingInvite?.id]);
 

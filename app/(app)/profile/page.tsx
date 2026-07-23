@@ -61,7 +61,7 @@ export default function ProfilePage() {
     setUsernameCheck("checking");
     const myCheck = ++usernameCheckRef.current;
     const t = setTimeout(async () => {
-      const { data } = await supabase.from("profiles").select("id").ilike("username", trimmed).neq("id", user.id).maybeSingle();
+      const { data } = await supabase.from("public_profiles").select("id").ilike("username", trimmed).neq("id", user.id).maybeSingle();
       if (usernameCheckRef.current !== myCheck) return; // a newer keystroke already superseded this check
       setUsernameCheck(data ? "taken" : "available");
     }, 400);
@@ -195,11 +195,6 @@ export default function ProfilePage() {
             <div style={{ fontSize: 18, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {profile?.name || "Guest"}
             </div>
-            {user && (
-              <div style={{ fontSize: 12, color: "var(--muted)", fontFamily: "monospace" }}>
-                ID: {profile?.player_id || "…"}
-              </div>
-            )}
             {user && (
               profile?.username ? (
                 <div style={{ fontSize: 12, color: "var(--blue)" }}>@{profile.username}</div>

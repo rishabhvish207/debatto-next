@@ -4,7 +4,7 @@ import { AppIcon } from "@/components/ui/AppIcon";
 const CARDS = [
   { href: "/offline", label: "Debots", desc: "Debate an AI opponent", icon: "⚔", style: "hub-card-primary" },
   { href: "/online/random", label: "Online", desc: "Random matchmaking", icon: "🌐", style: "hub-card-primary" },
-  { href: "/online/friends", label: "Friend Match", desc: "Challenge a friend directly", icon: "🤝", style: "hub-card-secondary" },
+  { href: "/online/friends", label: "Friend Match", desc: "Challenge a friend directly", icon: "🤝", style: "hub-card-primary" },
 ];
 
 export default function PlayPage() {

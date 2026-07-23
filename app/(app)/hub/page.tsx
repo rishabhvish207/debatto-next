@@ -3,9 +3,9 @@ import { AppIcon } from "@/components/ui/AppIcon";
 
 const CARDS = [
   { href: "/play", label: "Play", desc: "Debots, online & friend matches", icon: "⚔", style: "hub-card-primary" },
-  { href: "/learning", label: "Learn", desc: "Fallacies & technique", icon: "📚", style: "hub-card-secondary" },
-  { href: "/store", label: "Store", desc: "Themes & customization", icon: "🛍", style: "hub-card-secondary" },
-  { href: "/achievements", label: "Achievements", desc: "Track your progress", icon: "🏅", style: "hub-card-secondary" },
+  { href: "/learning", label: "Learn", desc: "Fallacies & technique", icon: "📚", style: "hub-card-primary" },
+  { href: "/store", label: "Store", desc: "Themes & customization", icon: "🛍", style: "hub-card-primary" },
+  { href: "/achievements", label: "Achievements", desc: "Track your progress", icon: "🏅", style: "hub-card-primary" },
 ];
 
 export default function HubPage() {

@@ -23,6 +23,7 @@ import { DEFAULT_ACHIEVEMENTS, AchievementDef } from "@/config/Achievements";
 import { getNewlyUnlocked, normalizeMatch } from "@/lib/achievements";
 import { DEFAULT_JUDGE_SETTINGS, JudgeSettings } from "@/config/Judge";
 import { DEFAULT_REWARD_PER_CORRECT } from "@/config/DailyChallenge";
+import type { MatchInvite } from "@/lib/matchInvites";
 
 const supabase = createClient();
 const DEFAULT_NAME = GAME_CONFIG.defaultName;
@@ -37,6 +38,8 @@ type Profile = {
   bio?: string | null;
   avatar_url?: string | null;
   equipped_theme_id?: string | null; // null/absent = the default theme
+  username?: string | null;          // unique handle for friend search — null until the player sets one
+  show_history_public?: boolean;     // toggled in Settings; gates whether other players can see your online history
   // Cumulative totals, never decrease — `coins` itself can't be used for
   // "earn/spend this much lifetime" achievements since it's a spendable
   // balance that goes back down on every purchase. The admin debucks cheat
@@ -65,6 +68,9 @@ type GameContextValue = {
   spendCoins: (amount: number, extra?: Partial<Profile>) => void;
   uploadAvatar: (file: File) => Promise<{ ok: boolean; error?: string }>;
   removeAvatar: () => Promise<{ ok: boolean; error?: string }>;
+  onlineUserIds: Set<string>; // live presence — profile ids currently connected app-wide
+  incomingInvite: MatchInvite | null; // most recent live Friend Match invite popup — see InvitePopup
+  setIncomingInvite: (invite: MatchInvite | null) => void;
 
   opps: any[];
   oppsLoading: boolean;
@@ -239,6 +245,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         bio: data.bio ?? null,
         avatar_url: data.avatar_url ?? null,
         equipped_theme_id: data.equipped_theme_id ?? null,
+        username: data.username ?? null,
+        show_history_public: data.show_history_public ?? true,
         lifetimeDebucksEarned: data.lifetime_debucks_earned ?? 0,
         lifetimeDebucksSpent: data.lifetime_debucks_spent ?? 0,
       });
@@ -418,6 +426,66 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
     return () => authListener.subscription.unsubscribe();
   }, []);
+
+  // ── PRESENCE: who's currently online, app-wide ──
+  //
+  // One shared Realtime Presence channel joined for the lifetime of a
+  // logged-in session — not something each page (Friends list, Friend
+  // Match setup) opens for itself, so "online" doesn't flicker as someone
+  // navigates between those screens. Guests never join (no stable user id
+  // to track, and they can't be friended anyway).
+  const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!user?.id) { setOnlineUserIds(new Set()); return; }
+
+    const channel = supabase.channel("presence:online", { config: { presence: { key: user.id } } });
+    channel
+      .on("presence", { event: "sync" }, () => {
+        setOnlineUserIds(new Set(Object.keys(channel.presenceState())));
+      })
+      .subscribe(async (status: string) => {
+        if (status === "SUBSCRIBED") await channel.track({ online_at: new Date().toISOString() });
+      });
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id]);
+
+  // ── FRIEND MATCH INVITE POPUP ──
+  //
+  // Two ways an invite surfaces here, both folding into the same
+  // `incomingInvite` state so InvitePopup only has one thing to render:
+  //   1. Already pending when this tab connects (e.g. invited while
+  //      offline, then opened the app) — one-time fetch on login.
+  //   2. Arrives live while connected — Realtime INSERT subscription.
+  // The Notifications page is the durable list; this is just the toast.
+  const [incomingInvite, setIncomingInvite] = useState<MatchInvite | null>(null);
+  useEffect(() => {
+    if (!user?.id) { setIncomingInvite(null); return; }
+
+    (async () => {
+      const { data } = await supabase
+        .from("match_invites")
+        .select("*")
+        .eq("invitee_id", user.id)
+        .eq("status", "pending")
+        .gt("expires_at", new Date().toISOString())
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (data) setIncomingInvite(data as MatchInvite);
+    })();
+
+    const channel = supabase
+      .channel(`invite-listen:${user.id}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "match_invites", filter: `invitee_id=eq.${user.id}` },
+        (payload: any) => setIncomingInvite(payload.new as MatchInvite)
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id]);
 
   // ── DEBOTS: catalog (public) + per-user unlock status ──
   const fetchDebots = async () => {
@@ -1183,6 +1251,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
         spendCoins,
         uploadAvatar,
         removeAvatar,
+        onlineUserIds,
+        incomingInvite,
+        setIncomingInvite,
         opps,
         oppsLoading,
         unlockDebot,

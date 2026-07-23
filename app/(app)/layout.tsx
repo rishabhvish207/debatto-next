@@ -5,6 +5,7 @@ import { useGame } from "@/contexts/GameContext";
 import { TopBar } from "@/components/shell/TopBar";
 import { RightDrawer } from "@/components/shell/RightDrawer";
 import { ConfirmModal } from "@/components/shell/ConfirmModal";
+import { InvitePopup } from "@/components/shell/InvitePopup";
 import { AppIcon } from "@/components/ui/AppIcon";
 
 export default function AppGroupLayout({ children }: { children: React.ReactNode }) {
@@ -46,6 +47,7 @@ export default function AppGroupLayout({ children }: { children: React.ReactNode
 
       <TopBar onOpenDrawer={() => setDrawerOpen(true)} />
       {drawerOpen && <RightDrawer onClose={() => setDrawerOpen(false)} />}
+      <InvitePopup />
 
       {apiError && (
         <div style={{

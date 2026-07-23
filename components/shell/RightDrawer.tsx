@@ -44,6 +44,11 @@ export function RightDrawer({ onClose }: { onClose: () => void }) {
         <button className="drawer-item" onClick={() => go("/profile")}>
           <span style={{ width: 20, display: "inline-flex", justifyContent: "center" }}><AppIcon token="👤" size={16} /></span> Profile
         </button>
+        {user && (
+          <button className="drawer-item" onClick={() => go("/notifications")}>
+            <span style={{ width: 20, display: "inline-flex", justifyContent: "center" }}><AppIcon token="🔔" size={16} /></span> Notifications
+          </button>
+        )}
         <button className="drawer-item" onClick={() => go("/history")}>
           <span style={{ width: 20, display: "inline-flex", justifyContent: "center" }}><AppIcon token="📜" size={16} /></span> Match History
         </button>

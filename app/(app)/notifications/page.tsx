@@ -50,7 +50,8 @@ export default function NotificationsPage() {
     ]));
     let peopleMap: Record<string, ProfileLite> = {};
     if (otherIds.length) {
-      const { data: profs } = await supabase.from("public_profiles").select("id, name, username").in("id", otherIds);
+      const { data: profs, error: profsError } = await supabase.from("public_profiles").select("id, name, username").in("id", otherIds);
+      if (profsError) console.error(profsError);
       peopleMap = Object.fromEntries((profs || []).map((p: any) => [p.id, p]));
     }
 

@@ -567,7 +567,8 @@ export async function loadOnlineHistory(user: AuthUser): Promise<Result> {
   );
   let opponents: Record<string, { username: string | null; name: string }> = {};
   if (opponentIds.length) {
-    const { data: profs } = await supabase.from("public_profiles").select("id, username, name").in("id", opponentIds);
+    const { data: profs, error: profsError } = await supabase.from("public_profiles").select("id, username, name").in("id", opponentIds);
+    if (profsError) console.error(profsError);
     opponents = Object.fromEntries((profs || []).map((p: any) => [p.id, { username: p.username, name: p.name }]));
   }
 

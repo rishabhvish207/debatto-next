@@ -13,12 +13,15 @@ import { AppIcon } from "@/components/ui/AppIcon";
 
 const supabase = createClient();
 
-const ITEM_OPTIONS: { key: string; label: string }[] = [
+const STACKABLE_ITEMS: { key: string; label: string }[] = [
   { key: "ace_card", label: "Ace Card" },
   { key: "confidence_pill", label: "Confidence Pill" },
   { key: "revival_shot", label: "Revival Shot" },
-  { key: "insight_lens", label: "Insight Lens" },
 ];
+// A gadget, not a consumable — same as everywhere else it's used in the
+// app (user_inventory.insight_lens is a boolean, not a count), so it's a
+// toggle here rather than a stepper that could reach 2+.
+const GADGET_ITEM = { key: "insight_lens", label: "Insight Lens" };
 
 type ProfileLite = { id: string; name: string; username: string | null; avatar_url: string | null };
 type FriendshipRow = {
@@ -70,7 +73,7 @@ export default function OnlineFriendsPage() {
     const otherIds = Array.from(new Set((data || []).map((f: any) => (f.requester_id === user.id ? f.addressee_id : f.requester_id))));
     let others: Record<string, ProfileLite> = {};
     if (otherIds.length) {
-      const { data: profs } = await supabase.from("profiles").select("id, name, username, avatar_url").in("id", otherIds);
+      const { data: profs } = await supabase.from("public_profiles").select("id, name, username, avatar_url").in("id", otherIds);
       others = Object.fromEntries((profs || []).map((p: any) => [p.id, p]));
     }
 
@@ -87,7 +90,7 @@ export default function OnlineFriendsPage() {
     setSearching(true);
     const t = setTimeout(async () => {
       const { data } = await supabase
-        .from("profiles")
+        .from("public_profiles")
         .select("id, name, username, avatar_url")
         .ilike("username", `%${trimmed}%`)
         .neq("id", user.id)
@@ -264,7 +267,7 @@ function ChallengeSetup({ target, onCancel, onSend }: {
           Items <span style={{ color: "var(--muted)" }}>(off by default — nothing here unless you turn it on)</span>
         </label>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-          {ITEM_OPTIONS.map((opt) => {
+          {STACKABLE_ITEMS.map((opt) => {
             const count = items[opt.key] || 0;
             return (
               <div key={opt.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -275,6 +278,15 @@ function ChallengeSetup({ target, onCancel, onSend }: {
               </div>
             );
           })}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ flex: 1, fontSize: 13 }}>{GADGET_ITEM.label} <span style={{ color: "var(--muted)" }}>(1 max)</span></span>
+            <button
+              className={`btn btn-sm ${items[GADGET_ITEM.key] ? "btn-primary" : "btn-ghost"}`}
+              onClick={() => setItemCount(GADGET_ITEM.key, items[GADGET_ITEM.key] ? 0 : 1)}
+            >
+              {items[GADGET_ITEM.key] ? "Enabled" : "Off"}
+            </button>
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>

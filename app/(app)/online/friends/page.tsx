@@ -7,6 +7,7 @@
 // social graph.
 
 import { useEffect, useState, ReactNode } from "react";
+import Link from "next/link";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { AppIcon } from "@/components/ui/AppIcon";
@@ -46,8 +47,50 @@ export default function OnlineFriendsPage() {
   const [challengeTarget, setChallengeTarget] = useState<ProfileLite | null>(null);
   const [inviteSentTo, setInviteSentTo] = useState<string | null>(null);
 
+  // Surfaced directly on this page instead of only in Notifications — an
+  // active Friend Match you're already in shouldn't require a detour
+  // through a whole separate page to get back to.
+  const [ongoingMatch, setOngoingMatch] = useState<{ id: string; opponentName: string } | null>(null);
+
+  async function loadOngoingMatch() {
+    if (!user) { setOngoingMatch(null); return; }
+    const { data, error } = await supabase
+      .from("online_matches")
+      .select("id, player_a, player_b")
+      .eq("mode", "friend")
+      .eq("status", "active")
+      .or(`player_a.eq.${user.id},player_b.eq.${user.id}`)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) { console.error(error); setOngoingMatch(null); return; }
+    if (!data) { setOngoingMatch(null); return; }
+    const oppId = data.player_a === user.id ? data.player_b : data.player_a;
+    const { data: opp } = await supabase.from("public_profiles").select("name, username").eq("id", oppId).maybeSingle();
+    setOngoingMatch({ id: data.id, opponentName: opp?.username ? `@${opp.username}` : opp?.name || "opponent" });
+  }
+
   async function sendInvite(target: ProfileLite, roundsTotal: number, allowedItems: Record<string, number>, topicText: string, hostSide: "FOR" | "AGAINST", firstArguerIsHost: boolean) {
     if (!user) return;
+
+    // Block a second live challenge to the same friend — this is what
+    // actually caused the "two different matches" bug last time: nothing
+    // stopped a retry while the first invite was still pending, and each
+    // one independently (and correctly) turned into its own valid match.
+    const { data: existingInvites } = await supabase
+      .from("match_invites")
+      .select("id, status, match_id")
+      .eq("host_id", user.id)
+      .eq("invitee_id", target.id)
+      .in("status", ["pending", "accepted"]);
+    for (const inv of existingInvites || []) {
+      if (inv.status === "pending") { setActionError(`You already have a pending challenge to @${target.username}.`); return; }
+      if (inv.match_id) {
+        const { data: m } = await supabase.from("online_matches").select("status").eq("id", inv.match_id).maybeSingle();
+        if (m && m.status !== "completed") { setActionError(`You already have a match in progress with @${target.username}.`); return; }
+      }
+    }
+
     const { error } = await supabase.from("match_invites").insert({
       host_id: user.id,
       invitee_id: target.id,
@@ -57,7 +100,10 @@ export default function OnlineFriendsPage() {
       host_side: hostSide,
       first_arguer_is_host: firstArguerIsHost,
     });
-    if (error) { setActionError("Failed to send challenge."); return; }
+    if (error) {
+      setActionError(error.code === "23505" ? `You already have a pending challenge to @${target.username}.` : "Failed to send challenge.");
+      return;
+    }
     setChallengeTarget(null);
     setInviteSentTo(target.id);
     setTimeout(() => setInviteSentTo((cur) => (cur === target.id ? null : cur)), 4000);
@@ -85,6 +131,20 @@ export default function OnlineFriendsPage() {
   }
 
   useEffect(() => { refresh(); }, [user]);
+  useEffect(() => { loadOngoingMatch(); }, [user]);
+
+  // Live-update the banner if a match starts or finishes while this page
+  // happens to be open — cheap to just refetch on any change involving
+  // this user's matches rather than trying to patch state precisely.
+  useEffect(() => {
+    if (!user) return;
+    const channel = supabase
+      .channel(`friend-match-banner:${user.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "online_matches", filter: `player_a=eq.${user.id}` }, () => loadOngoingMatch())
+      .on("postgres_changes", { event: "*", schema: "public", table: "online_matches", filter: `player_b=eq.${user.id}` }, () => loadOngoingMatch())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [user]);
 
   // Debounced username search, excluding people already connected in any way.
   useEffect(() => {
@@ -168,6 +228,17 @@ export default function OnlineFriendsPage() {
     <div className="root" style={{ padding: "20px 16px", maxWidth: 640, margin: "0 auto" }}>
       <h2 className="heading" style={{ fontSize: 22, marginBottom: 16 }}>Friends</h2>
 
+      {ongoingMatch && (
+        <Link
+          href={`/online/match/${ongoingMatch.id}`}
+          className="card"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: 14, marginBottom: 16, borderColor: "var(--blue-soft)" }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Match in progress vs {ongoingMatch.opponentName}</span>
+          <span className="btn btn-primary btn-sm">Resume</span>
+        </Link>
+      )}
+
       <div className="card" style={{ padding: 14, marginBottom: 20 }}>
         <input
           className="input-field"
@@ -221,7 +292,7 @@ export default function OnlineFriendsPage() {
             ) : friends.map((r) => (
               <Row key={r.id} person={r.other} online={!!r.other && onlineUserIds.has(r.other.id)}
                 pendingLabel={inviteSentTo === r.other?.id ? "Challenge sent!" : undefined}>
-                <button className="btn btn-primary btn-sm" disabled={!r.other} onClick={() => r.other && setChallengeTarget(r.other)}>Challenge</button>
+                <button className="btn btn-primary btn-sm" disabled={!r.other} onClick={() => { if (r.other) { setActionError(""); setChallengeTarget(r.other); } }}>Challenge</button>
                 <button className="btn btn-ghost btn-sm" onClick={() => cancelOrUnfriend(r.id)}>Remove</button>
               </Row>
             ))}
@@ -232,7 +303,8 @@ export default function OnlineFriendsPage() {
       {challengeTarget && (
         <ChallengeSetup
           target={challengeTarget}
-          onCancel={() => setChallengeTarget(null)}
+          error={actionError}
+          onCancel={() => { setChallengeTarget(null); setActionError(""); }}
           onSend={(rounds, items, topic, hostSide, firstArguerIsHost) => sendInvite(challengeTarget, rounds, items, topic, hostSide, firstArguerIsHost)}
         />
       )}
@@ -240,8 +312,9 @@ export default function OnlineFriendsPage() {
   );
 }
 
-function ChallengeSetup({ target, onCancel, onSend }: {
+function ChallengeSetup({ target, error, onCancel, onSend }: {
   target: ProfileLite;
+  error?: string;
   onCancel: () => void;
   onSend: (roundsTotal: number, allowedItems: Record<string, number>, topicText: string, hostSide: "FOR" | "AGAINST", firstArguerIsHost: boolean) => void;
 }) {
@@ -316,6 +389,8 @@ function ChallengeSetup({ target, onCancel, onSend }: {
             </button>
           </div>
         </div>
+
+        {error && <div style={{ fontSize: 12, color: "var(--red)", marginBottom: 12 }}>{error}</div>}
 
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={!topic.trim()} onClick={() => onSend(rounds, items, topic.trim(), hostSide, firstArguerIsHost)}>Send Challenge</button>

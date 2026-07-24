@@ -68,7 +68,7 @@ export default function AppGroupLayout({ children }: { children: React.ReactNode
         <ConfirmModal
           title={navGuardMessage.title}
           message={navGuardMessage.message}
-          confirmLabel="Exit anyway"
+          confirmLabel={navGuardMessage.confirmLabel || "Exit anyway"}
           cancelLabel="Stay"
           onConfirm={confirmNavigation}
           onCancel={cancelNavigation}

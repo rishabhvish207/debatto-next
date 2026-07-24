@@ -50,6 +50,39 @@ export const DEFAULT_PVP_JUDGE_SETTINGS: PvpJudgeSettings = {
   impactWeak: 5,
 };
 
+// Scores ONE argument at a time — used for the new immediate-feedback flow
+// where each submission gets judged the instant it lands, rather than
+// waiting for both sides of a round to be in. `context` is the most recent
+// argument from the OTHER side (if any) that this one is responding to —
+// null for the very first argument of the match, where there's nothing to
+// rebut yet and it's judged purely as an opening statement.
+export const DEFAULT_PVP_TURN_PROMPT = `You are an impartial debate judge scoring a single turn in a live human debate.
+TOPIC: "{topic}" | ROUND: {round}/{rounds} | THIS DEBATER'S SIDE: {side}
+{context_block}
+THIS DEBATER SAID: "{arg}"
+
+JUDGE RULES — grade like a strict debate judge, not a cheerleader. Most arguments are mediocre; reserve high scores for arguments that earn them.
+- gain 0-{max_gain}, anchored: 0-5 = off-topic, incoherent, or (if responding to something) ignores it entirely with no new point. 6-15 = on-topic but shallow/unsupported assertion. 16-30 = a real point with some reasoning or evidence. 31 to ({max_gain}-10) = a well-reasoned point that directly engages what it's responding to (or, for an opening statement, lays out a genuinely strong case). The top 10 points are exceptional.
+- Before scoring, silently check: does it make actual sense in English, and — if there's something to respond to — does it actually engage with it? If either check fails, gain must be 0-5 regardless of length or confident tone.
+- penalty 0-{max_penalty}: deduct for logical fallacies, irrelevance, contradictions, or (if responding to something) simply restating without advancing the argument. Low-effort or nonsensical input should receive a HIGH penalty, not a low one.
+- tags: 2-3 short labels for this argument specifically (e.g. "Logical Rebuttal", "Weak Evidence", "Ad Hominem").
+- fallacies: fallacies found in this argument only, quoting its own text.
+
+Return ONLY valid JSON:
+{ "gain": 0-{max_gain}, "penalty": 0-{max_penalty}, "tags": ["..."], "fallacies": [{"type":"name","text":"exact phrase from THIS DEBATER SAID"}] }`;
+
+export type PvpTurnJudgeSettings = {
+  systemPromptTemplate: string;
+  maxGain: number;
+  maxPenalty: number;
+};
+
+export const DEFAULT_PVP_TURN_JUDGE_SETTINGS: PvpTurnJudgeSettings = {
+  systemPromptTemplate: DEFAULT_PVP_TURN_PROMPT,
+  maxGain: 50,
+  maxPenalty: 30,
+};
+
 export function impactLabel(net: number, s: PvpJudgeSettings): string {
   if (net >= s.impactDevastating) return "Devastating";
   if (net >= s.impactStrong) return "Strong";

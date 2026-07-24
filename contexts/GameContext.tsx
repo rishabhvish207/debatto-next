@@ -28,6 +28,16 @@ import type { MatchInvite } from "@/lib/matchInvites";
 const supabase = createClient();
 const DEFAULT_NAME = GAME_CONFIG.defaultName;
 
+// Any screen that customizes navGuardMessage (currently just Daily
+// Challenge) MUST restore this on its own way out — nothing else (e.g. the
+// debot arena) ever sets its own, it just relies on this default being
+// intact when IT starts a battle.
+export const DEFAULT_NAV_GUARD_MESSAGE = {
+  title: "Exit this match?",
+  message: "Leaving now will end the debate and lose your progress in this round.",
+  confirmLabel: "Exit anyway",
+};
+
 type Profile = {
   name: string;
   coins: number;
@@ -223,14 +233,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
 
   const [apiError, setApiError] = useState("");
   const [battleActive, setBattleActive] = useState(false);
-  // battleActive's confirmation dialog defaults to match wording — the
-  // Daily Challenge (app/(app)/learning/page.tsx) overrides this while
-  // it's in progress, then it's fine to leave it as whatever it last was.
-  const [navGuardMessage, setNavGuardMessage] = useState({
-    title: "Exit this match?",
-    message: "Leaving now will end the debate and lose your progress in this round.",
-    confirmLabel: "Exit anyway",
-  });
+  // The debot arena (app/(app)/offline/page.tsx) never sets its own
+  // navGuardMessage — it just relies on this default. That means whoever
+  // DOES customize it (Daily Challenge) MUST restore DEFAULT_NAV_GUARD_MESSAGE
+  // on their own way out, or every debot match afterward shows the wrong
+  // prompt for the rest of the session. (This bit us once already.)
+  const [navGuardMessage, setNavGuardMessage] = useState(DEFAULT_NAV_GUARD_MESSAGE);
 
   const savingTopicRef = useRef(false);
 

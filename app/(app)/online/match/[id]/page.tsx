@@ -1,28 +1,32 @@
 "use client";
 
-// The live two-human arena. Visually mirrors the debot arena
-// (app/(app)/offline/page.tsx) — same fighter/HP-bar/side-badge layout via
-// the same PlayerSprite/HPBar/AdvBar components, same impact-colored
-// reveal card styling — but scores BOTH sides at once each round instead
-// of debot mode's sequential "you hit, then they hit" phases, since a PvP
-// round genuinely is simultaneous (the judge grades both real arguments
-// together, there's no AI turn to wait on afterward).
+// The live two-human arena. Visually mirrors the debot arena — fighters,
+// HP bars, side badges, impact-colored reveals via the same components —
+// but scores each argument the INSTANT it's submitted (not waiting for
+// both sides of a round), matching how debot mode gives you a result the
+// moment you submit rather than waiting on anything else. See
+// lib/onlineArena.ts's scorePvpTurn for the per-turn judge call.
 //
-// Turn-taking, scoring, and completion are unchanged from the previous
-// pass — see lib/onlineArena.ts. NOT in this pass: item usage still only
-// notifies the opponent, it doesn't apply an actual gameplay effect (e.g.
-// an Ace Card doesn't currently do anything to the round beyond the toast).
+// Whoever submits an argument scores their OWN turn — there's no longer a
+// "only player_a's client scores" rule (that was a source of fragility:
+// if player_a's browser wasn't around, nothing ever got scored). Both
+// clients also call finalizeMatchIfComplete defensively after every turn;
+// it's a no-op unless the match is actually fully scored.
+//
+// Realtime (postgres_changes) is the primary sync mechanism, backed by a
+// light poll every few seconds as a safety net — belt and suspenders,
+// since a single missed realtime event previously meant a manual refresh
+// was the only way to see anything move.
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
-import { scorePvpRound, finalizeMatchIfComplete } from "@/lib/onlineArena";
+import { scorePvpTurn, turnImpact, finalizeMatchIfComplete } from "@/lib/onlineArena";
 import { PlayerSprite } from "@/components/ui/PlayerSprite";
 import { HPBar } from "@/components/ui/HPBar";
 import { AdvBar } from "@/components/ui/AdvBar";
 import { InputPanel } from "@/components/game/InputPanel";
-import { AppIcon } from "@/components/ui/AppIcon";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 
 const supabase = createClient();
@@ -35,9 +39,12 @@ const ITEM_LABELS: Record<string, string> = {
 };
 
 const MAX_HP = 100;
-const DAMAGE_MULTIPLIER = 0.45; // symmetric — no player/opponent asymmetry makes sense when both sides are human
+const DAMAGE_MULTIPLIER = 0.45;
+const POLL_MS = 4000;
 
 const iStyle = (k: string) => (IMPACT_STYLE as Record<string, typeof IMPACT_STYLE.Ineffective>)[k] || IMPACT_STYLE.Ineffective;
+
+type Turn = { side: "a" | "b"; roundNumber: number; argument: string; gain: number; penalty: number; tags: string[] };
 
 export default function OnlineMatchPage() {
   const { id } = useParams<{ id: string }>();
@@ -51,11 +58,15 @@ export default function OnlineMatchPage() {
   const [submitting, setSubmitting] = useState(false);
   const [itemsRemaining, setItemsRemaining] = useState<Record<string, number>>({});
   const [itemToast, setItemToast] = useState("");
+  const [opponentTyping, setOpponentTyping] = useState(false);
   const [dmgFloat, setDmgFloat] = useState<{ who: "me" | "opp"; val: number } | null>(null);
   const [shakeMe, setShakeMe] = useState(false);
   const [shakeOpp, setShakeOpp] = useState(false);
-  const scoringRef = useRef<Set<string>>(new Set());
-  const seenScoredRounds = useRef<Set<string>>(new Set());
+  const [leaveConfirm, setLeaveConfirm] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const seenTurns = useRef<Set<string>>(new Set());
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTypingSentRef = useRef(0);
 
   async function loadAll() {
     const { data: m } = await supabase.from("online_matches").select("*").eq("id", id).maybeSingle();
@@ -72,13 +83,16 @@ export default function OnlineMatchPage() {
     setLoading(false);
   }
 
-  // ── All hooks unconditional, before any early return below ──
+  // ══════════ Every hook below is unconditional — declared before ANY
+  // early return in this component, with null-safe derived values so they
+  // work fine before `match`/`rounds` have actually loaded yet. ══════════
+
   useEffect(() => { loadAll(); }, [id]);
 
   useEffect(() => {
     const channel = supabase
       .channel(`arena:${id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "online_match_rounds", filter: `match_id=eq.${id}` }, () => loadAll())
+      .on("postgres_changes", { event: "*", schema: "public", table: "online_match_rounds", filter: `match_id=eq.${id}` }, () => { setOpponentTyping(false); loadAll(); })
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "online_matches", filter: `id=eq.${id}` }, (payload: any) => setMatch(payload.new))
       .on("broadcast", { event: "item_used" }, (payload: any) => {
         if (payload.payload?.by !== user?.id) {
@@ -86,112 +100,145 @@ export default function OnlineMatchPage() {
           setTimeout(() => setItemToast(""), 3500);
         }
       })
+      .on("broadcast", { event: "typing" }, (payload: any) => {
+        if (payload.payload?.by === user?.id) return;
+        setOpponentTyping(true);
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => setOpponentTyping(false), 2500);
+      })
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    return () => { supabase.removeChannel(channel); if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current); };
   }, [id, user?.id]);
+
+  // Safety-net poll — realtime is the primary path, this just means a
+  // missed event self-heals within a few seconds instead of needing a
+  // manual refresh.
+  useEffect(() => {
+    const interval = setInterval(() => { if (document.visibilityState === "visible") loadAll(); }, POLL_MS);
+    return () => clearInterval(interval);
+  }, [id]);
 
   const iAmA = match?.player_a === user?.id;
   const firstArguerIsA = !!match && match.first_arguer === match.player_a;
   const firstArgKey = firstArguerIsA ? "player_a_argument" : "player_b_argument";
   const secondArgKey = firstArguerIsA ? "player_b_argument" : "player_a_argument";
   const activeRound = rounds.find((r) => r.player_a_gain === null || r.player_b_gain === null);
-  const matchDone = match?.status === "completed";
+  const matchDone = match?.status === "completed" || match?.status === "abandoned";
 
-  // Only player_a's own client ever calls the judge — both clients still
-  // see the result via the row update, this just prevents two browsers
-  // racing to score the same round twice.
-  useEffect(() => {
-    if (!match || !iAmA || !activeRound || matchDone) return;
-    if (!activeRound.player_a_argument || !activeRound.player_b_argument) return;
-    if (activeRound.player_a_gain !== null) return;
-    if (scoringRef.current.has(activeRound.id)) return;
-    scoringRef.current.add(activeRound.id);
+  // Flat chronological turn list, oldest first.
+  const turns: Turn[] = [];
+  for (const r of rounds) {
+    if (r.player_a_argument && r.player_a_gain !== null) {
+      turns.push({ side: "a", roundNumber: r.round_number, argument: r.player_a_argument, gain: r.player_a_gain, penalty: r.player_a_penalty || 0, tags: r.fallacies?.a_tags || [] });
+    }
+    if (r.player_b_argument && r.player_b_gain !== null) {
+      turns.push({ side: "b", roundNumber: r.round_number, argument: r.player_b_argument, gain: r.player_b_gain, penalty: r.player_b_penalty || 0, tags: r.fallacies?.b_tags || [] });
+    }
+  }
+  turns.sort((x, y) => x.roundNumber - y.roundNumber || (x.side === (firstArguerIsA ? "a" : "b") ? -1 : 1));
 
-    (async () => {
-      const score = await scorePvpRound(match.topic_text, activeRound.round_number, match.rounds_total, activeRound.player_a_argument, activeRound.player_b_argument);
-      await supabase.from("online_match_rounds").update({
-        player_a_gain: score.aGain, player_a_penalty: score.aPenalty,
-        player_b_gain: score.bGain, player_b_penalty: score.bPenalty,
-        impact: score.impact, fallacies: { a: score.aFallacies, b: score.bFallacies, a_tags: score.aTags, b_tags: score.bTags },
-      }).eq("id", activeRound.id);
-      await finalizeMatchIfComplete(match.id);
-    })();
-  }, [match?.id, activeRound?.id, activeRound?.player_a_argument, activeRound?.player_b_argument, iAmA, matchDone]);
-
-  // Damage-float + shake whenever a round we haven't already reacted to
-  // finishes scoring — mirrors the debot arena's hit-feedback, just
-  // triggered by a row update instead of a phase transition.
+  // Damage-float + shake whenever a turn we haven't already reacted to
+  // finishes scoring.
   useEffect(() => {
     if (!match) return;
-    const justScored = rounds.find((r) => r.player_a_gain !== null && r.player_b_gain !== null && !seenScoredRounds.current.has(r.id));
-    if (!justScored) return;
-    seenScoredRounds.current.add(justScored.id);
-
-    const myGain = justScored[iAmA ? "player_a_gain" : "player_b_gain"] || 0;
-    const myPenalty = justScored[iAmA ? "player_a_penalty" : "player_b_penalty"] || 0;
-    const oppGain = justScored[iAmA ? "player_b_gain" : "player_a_gain"] || 0;
-    const oppPenalty = justScored[iAmA ? "player_b_penalty" : "player_a_penalty"] || 0;
-    const myNet = Math.max(0, myGain - myPenalty);
-    const oppNet = Math.max(0, oppGain - oppPenalty);
-    const dmgToOpp = Math.round(myNet * DAMAGE_MULTIPLIER);
-    const dmgToMe = Math.round(oppNet * DAMAGE_MULTIPLIER);
-
-    if (dmgToMe > 0) { setShakeMe(true); setDmgFloat({ who: "me", val: dmgToMe }); setTimeout(() => setShakeMe(false), 400); }
-    else if (dmgToOpp > 0) { setShakeOpp(true); setDmgFloat({ who: "opp", val: dmgToOpp }); setTimeout(() => setShakeOpp(false), 400); }
+    const last = turns[turns.length - 1];
+    if (!last) return;
+    const key = `${last.roundNumber}-${last.side}`;
+    if (seenTurns.current.has(key)) return;
+    seenTurns.current.add(key);
+    const isMine = (last.side === "a") === iAmA;
+    const net = Math.max(0, last.gain - last.penalty);
+    const dmg = Math.round(net * DAMAGE_MULTIPLIER);
+    if (dmg <= 0) return;
+    if (isMine) { setShakeOpp(true); setDmgFloat({ who: "opp", val: dmg }); setTimeout(() => setShakeOpp(false), 400); }
+    else { setShakeMe(true); setDmgFloat({ who: "me", val: dmg }); setTimeout(() => setShakeMe(false), 400); }
     setTimeout(() => setDmgFloat(null), 1100);
-  }, [rounds, iAmA, match]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns.length, match?.id]);
 
   if (loading) return <div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>;
   if (!match) return <div style={{ padding: 24, color: "var(--muted)" }}>Match not found.</div>;
 
   const myKey = iAmA ? "player_a_argument" : "player_b_argument";
+  const myGainKey = iAmA ? "player_a_gain" : "player_b_gain";
+  const myPenaltyKey = iAmA ? "player_a_penalty" : "player_b_penalty";
   const iAmFirstArguer = match.first_arguer === user?.id;
   const nextRoundNumber = rounds.length + 1;
   const oppId = iAmA ? match.player_b : match.player_a;
   const me = profiles[user?.id || ""];
   const opp = profiles[oppId];
-  const mySide = iAmA ? match.player_a_side : (match.player_a_side === "FOR" ? "AGAINST" : "FOR");
+  const mySide: "FOR" | "AGAINST" = iAmA ? match.player_a_side : (match.player_a_side === "FOR" ? "AGAINST" : "FOR");
   const oppSide = mySide === "FOR" ? "AGAINST" : "FOR";
+  const oppHandle = opp?.username ? `@${opp.username}` : opp?.name || "your opponent";
 
-  // Whose turn is it, right now, for the arena input.
+  // Whose turn is it, right now.
   let myTurn = false;
   let waitingLabel = "";
   if (!matchDone) {
     if (!activeRound) {
       myTurn = iAmFirstArguer;
-      if (!myTurn) waitingLabel = `Waiting for ${opp?.username ? "@" + opp.username : "your opponent"} to open round ${nextRoundNumber}`;
+      if (!myTurn) waitingLabel = opponentTyping ? `${oppHandle} is typing…` : `Waiting for ${oppHandle} to open round ${nextRoundNumber}`;
     } else if (!activeRound[firstArgKey]) {
       myTurn = iAmFirstArguer;
     } else if (!activeRound[secondArgKey]) {
       myTurn = !iAmFirstArguer;
-      if (!myTurn) waitingLabel = `Waiting for ${opp?.username ? "@" + opp.username : "your opponent"} to respond`;
-    } else {
-      waitingLabel = "Scoring round…";
+      if (!myTurn) waitingLabel = opponentTyping ? `${oppHandle} is typing…` : `Waiting for ${oppHandle} to respond`;
     }
   }
 
-  // HP derived from cumulative damage taken across all scored rounds —
-  // same math the debot arena uses (net * a multiplier), just symmetric
-  // since there's no AI persona to weight differently.
+  // HP derived from cumulative damage taken across all scored turns so far.
   let myHP = MAX_HP, oppHP = MAX_HP;
-  for (const r of rounds) {
-    if (r.player_a_gain === null || r.player_b_gain === null) continue;
-    const myNet = Math.max(0, (r[iAmA ? "player_a_gain" : "player_b_gain"] || 0) - (r[iAmA ? "player_a_penalty" : "player_b_penalty"] || 0));
-    const oppNet = Math.max(0, (r[iAmA ? "player_b_gain" : "player_a_gain"] || 0) - (r[iAmA ? "player_b_penalty" : "player_a_penalty"] || 0));
-    oppHP = Math.max(0, oppHP - Math.round(myNet * DAMAGE_MULTIPLIER));
-    myHP = Math.max(0, myHP - Math.round(oppNet * DAMAGE_MULTIPLIER));
+  for (const t of turns) {
+    const net = Math.max(0, t.gain - t.penalty);
+    const dmg = Math.round(net * DAMAGE_MULTIPLIER);
+    const dealtToMe = (t.side === "a") !== iAmA;
+    if (dealtToMe) myHP = Math.max(0, myHP - dmg); else oppHP = Math.max(0, oppHP - dmg);
+  }
+
+  const myScore = turns.filter((t) => (t.side === "a") === iAmA).reduce((s, t) => s + Math.max(0, t.gain - t.penalty), 0);
+  const oppScore = turns.filter((t) => (t.side === "a") !== iAmA).reduce((s, t) => s + Math.max(0, t.gain - t.penalty), 0);
+
+  function handleInputChange(v: string) {
+    setInput(v);
+    if (!myTurn) return;
+    const now = Date.now();
+    if (now - lastTypingSentRef.current < 400) return;
+    lastTypingSentRef.current = now;
+    supabase.channel(`arena:${id}`).send({ type: "broadcast", event: "typing", payload: { by: user?.id } });
   }
 
   async function submit() {
     const text = input.trim();
-    if (!text || !myTurn) return;
+    if (!text || !myTurn || submitting) return;
     setSubmitting(true);
-    if (!activeRound) {
-      await supabase.from("online_match_rounds").insert({ match_id: match.id, round_number: nextRoundNumber, [firstArgKey]: text });
-    } else {
-      await supabase.from("online_match_rounds").update({ [myKey]: text }).eq("id", activeRound.id);
-    }
     setInput("");
+
+    // Whatever the OTHER side most recently said, anywhere in the match so
+    // far — null only for the very first argument of the whole match.
+    const precedingOpponentArg = turns.length ? turns[turns.length - 1].argument : null;
+
+    const score = await scorePvpTurn(match.topic_text, mySide, text, precedingOpponentArg, Math.min(nextRoundNumber, match.rounds_total), match.rounds_total);
+    const impact = turnImpact(Math.max(0, score.gain - score.penalty));
+    const fallacyKey = myKey === "player_a_argument" ? "a" : "b";
+    const tagsKey = myKey === "player_a_argument" ? "a_tags" : "b_tags";
+
+    if (!activeRound) {
+      const { error } = await supabase.from("online_match_rounds").insert({
+        match_id: match.id, round_number: nextRoundNumber, [firstArgKey]: text,
+        [myGainKey]: score.gain, [myPenaltyKey]: score.penalty, impact,
+        fallacies: { [fallacyKey]: score.fallacies, [tagsKey]: score.tags },
+      });
+      if (error) console.error(error);
+    } else {
+      const existingFallacies = activeRound.fallacies || {};
+      const { error } = await supabase.from("online_match_rounds").update({
+        [myKey]: text, [myGainKey]: score.gain, [myPenaltyKey]: score.penalty, impact,
+        fallacies: { ...existingFallacies, [fallacyKey]: score.fallacies, [tagsKey]: score.tags },
+      }).eq("id", activeRound.id);
+      if (error) console.error(error);
+    }
+
+    await finalizeMatchIfComplete(match.id);
     setSubmitting(false);
   }
 
@@ -199,14 +246,21 @@ export default function OnlineMatchPage() {
     const remaining = itemsRemaining[key] || 0;
     if (remaining <= 0) return;
     setItemsRemaining((prev) => ({ ...prev, [key]: remaining - 1 }));
-    const channel = supabase.channel(`arena:${id}`);
-    channel.send({ type: "broadcast", event: "item_used", payload: { by: user?.id, byName: me?.username ? `@${me.username}` : me?.name, item: key } });
+    supabase.channel(`arena:${id}`).send({ type: "broadcast", event: "item_used", payload: { by: user?.id, byName: me?.username ? `@${me.username}` : me?.name, item: key } });
   }
 
-  const myScore = rounds.reduce((s, r) => s + Math.max(0, (r[iAmA ? "player_a_gain" : "player_b_gain"] || 0) - (r[iAmA ? "player_a_penalty" : "player_b_penalty"] || 0)), 0);
-  const oppScore = rounds.reduce((s, r) => s + Math.max(0, (r[iAmA ? "player_b_gain" : "player_a_gain"] || 0) - (r[iAmA ? "player_b_penalty" : "player_a_penalty"] || 0)), 0);
+  async function confirmLeave() {
+    setLeaving(true);
+    const { error } = await supabase.from("online_matches").update({ status: "abandoned", completed_at: new Date().toISOString() }).eq("id", match.id);
+    if (error) console.error(error);
+    setLeaving(false);
+    setLeaveConfirm(false);
+  }
+
   const itemEntries = Object.entries(match.allowed_items || {}).filter(([, c]) => (c as number) > 0);
-  const scoredRounds = rounds.filter((r) => r.player_a_gain !== null && r.player_b_gain !== null).slice().reverse();
+  const lastTurn = turns[turns.length - 1];
+  const lastTurnNet = lastTurn ? Math.max(0, lastTurn.gain - lastTurn.penalty) : 0;
+  const lastTurnImpact = lastTurn ? turnImpact(lastTurnNet) : "Ineffective";
 
   return (
     <div className="root" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", maxWidth: 840, margin: "0 auto", padding: 14, gap: 10 }}>
@@ -224,9 +278,22 @@ export default function OnlineMatchPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 7 }}>
           <div style={{ fontSize: 12, color: "var(--muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{match.topic_text}"</div>
           <span className="badge" style={{ background: "var(--faint)", color: "var(--muted)" }}>R {Math.min(nextRoundNumber, match.rounds_total)}/{match.rounds_total}</span>
+          {!matchDone && (
+            <button className="btn btn-ghost btn-sm" onClick={() => setLeaveConfirm(true)} style={{ fontSize: 11, padding: "3px 8px" }}>Forfeit</button>
+          )}
         </div>
-        <AdvBar pPts={myScore} oPts={oppScore} pLabel="You" oLabel={opp?.username ? `@${opp.username}` : opp?.name || "Opponent"} />
+        <AdvBar pPts={myScore} oPts={oppScore} pLabel="You" oLabel={oppHandle} />
       </div>
+
+      {leaveConfirm && (
+        <div className="card" style={{ padding: 14, borderColor: "var(--red)" }}>
+          <div style={{ fontSize: 13, marginBottom: 10 }}>Forfeit this match? Your opponent wins and this can't be undone.</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-danger btn-sm" disabled={leaving} onClick={confirmLeave} style={{ flex: 1 }}>Forfeit</button>
+            <button className="btn btn-ghost btn-sm" disabled={leaving} onClick={() => setLeaveConfirm(false)} style={{ flex: 1 }}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 36px 1fr", gap: 10, padding: "8px 0" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -249,11 +316,11 @@ export default function OnlineMatchPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span className="badge" style={{ background: "var(--red-soft)", color: "var(--red)", fontSize: 10, alignSelf: "flex-end" }}>{oppSide}</span>
           <div style={{ height: 150, maxWidth: 150, width: "100%", margin: "0 auto" }}>
-            <PlayerSprite shake={shakeOpp} name={opp?.username ? `@${opp.username}` : opp?.name || "Opponent"} avatarUrl={opp?.avatar_url} />
+            <PlayerSprite shake={shakeOpp} name={oppHandle} avatarUrl={opp?.avatar_url} />
           </div>
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{opp?.username ? `@${opp.username}` : opp?.name}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{oppHandle}</span>
               <span>{Math.round(oppHP)}/{MAX_HP}</span>
             </div>
             <HPBar current={oppHP} max={MAX_HP} color="var(--red)" />
@@ -266,7 +333,9 @@ export default function OnlineMatchPage() {
       {matchDone ? (
         <div className="card anim-fade-up" style={{ padding: 18, textAlign: "center" }}>
           <div className="heading" style={{ fontSize: 24, marginBottom: 4 }}>
-            {match.result === "draw" ? "Draw" : (match.result === "a_win") === iAmA ? "You Won" : "You Lost"}
+            {match.status === "abandoned"
+              ? "Match Forfeited"
+              : match.result === "draw" ? "Draw" : (match.result === "a_win") === iAmA ? "You Won" : "You Lost"}
           </div>
           {match.mode === "random" && typeof match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] === "number" && (
             <div style={{ fontSize: 13, color: "var(--muted)" }}>
@@ -276,20 +345,14 @@ export default function OnlineMatchPage() {
         </div>
       ) : (
         <>
-          {/* Latest round reveal — impact-colored like the debot arena's "Strike" card, but both sides at once since PvP scores simultaneously */}
-          {scoredRounds[0] && (
-            <div className="card anim-fade-up" style={{ padding: 16, borderColor: iStyle(scoredRounds[0].impact).bc, background: iStyle(scoredRounds[0].impact).bg }}>
-              <div className="anim-pop heading" style={{ fontSize: 20, color: iStyle(scoredRounds[0].impact).color, marginBottom: 10 }}>{scoredRounds[0].impact} Round</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>You</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--blue)" }}>+{Math.max(0, (scoredRounds[0][iAmA ? "player_a_gain" : "player_b_gain"] || 0) - (scoredRounds[0][iAmA ? "player_a_penalty" : "player_b_penalty"] || 0))} Pts</div>
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>{opp?.username ? `@${opp.username}` : "Opponent"}</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--red)" }}>+{Math.max(0, (scoredRounds[0][iAmA ? "player_b_gain" : "player_a_gain"] || 0) - (scoredRounds[0][iAmA ? "player_b_penalty" : "player_a_penalty"] || 0))} Pts</div>
-                </div>
+          {/* Latest turn reveal — impact-colored like the debot arena's "Strike" card */}
+          {lastTurn && (
+            <div className="card anim-fade-up" style={{ padding: 16, borderColor: iStyle(lastTurnImpact).bc, background: iStyle(lastTurnImpact).bg }}>
+              <div className="anim-pop heading" style={{ fontSize: 20, color: iStyle(lastTurnImpact).color, marginBottom: 6 }}>
+                {lastTurnImpact} — {(lastTurn.side === "a") === iAmA ? "You" : oppHandle}
               </div>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>+{lastTurnNet} Pts</div>
+              {lastTurn.tags.length > 0 && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>{lastTurn.tags.join(" · ")}</div>}
             </div>
           )}
 
@@ -303,7 +366,6 @@ export default function OnlineMatchPage() {
                   disabled={!(itemsRemaining[key] > 0)}
                   onClick={() => handleUseItem(key)}
                   title="Notifies your opponent — doesn't change scoring yet"
-                  style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
                 >
                   {ITEM_LABELS[key] || key} ({itemsRemaining[key] || 0})
                 </button>
@@ -312,7 +374,7 @@ export default function OnlineMatchPage() {
           )}
 
           {myTurn ? (
-            <InputPanel input={input} setInput={setInput} onSend={submit} isEvaluating={submitting} curSide={mySide} round={Math.min(nextRoundNumber, match.rounds_total)} rounds={match.rounds_total} />
+            <InputPanel input={input} setInput={handleInputChange} onSend={submit} isEvaluating={submitting} curSide={mySide} round={Math.min(nextRoundNumber, match.rounds_total)} rounds={match.rounds_total} />
           ) : (
             <div className="card" style={{ padding: 14, textAlign: "center" }}>
               <span className="anim-pulse" style={{ fontSize: 13, color: "var(--muted)" }}>{waitingLabel}</span>
@@ -321,17 +383,19 @@ export default function OnlineMatchPage() {
         </>
       )}
 
-      {/* Full round history — the debot arena only shows the last exchange since it's mid-flow;
-          this is worth keeping in full since it's the permanent record of a completed exchange. */}
-      {scoredRounds.length > 1 && (
+      {/* Full exchange history, newest first, excluding the just-revealed last turn above */}
+      {turns.length > 1 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {scoredRounds.slice(1).map((r) => (
-            <div key={r.id} className="card" style={{ padding: 12, fontSize: 12, borderLeft: `3px solid ${iStyle(r.impact).color}` }}>
-              <div style={{ color: "var(--muted)", marginBottom: 4 }}>Round {r.round_number} · {r.impact}</div>
-              <div style={{ marginBottom: 3 }}><b>{iAmA ? "You" : (profiles[match.player_a]?.username ? `@${profiles[match.player_a].username}` : "Host")}:</b> {r.player_a_argument}</div>
-              <div><b>{!iAmA ? "You" : (profiles[match.player_b]?.username ? `@${profiles[match.player_b].username}` : "Opponent")}:</b> {r.player_b_argument}</div>
-            </div>
-          ))}
+          {turns.slice(0, -1).reverse().map((t, i) => {
+            const net = Math.max(0, t.gain - t.penalty);
+            const isMine = (t.side === "a") === iAmA;
+            return (
+              <div key={i} className="card" style={{ padding: 12, fontSize: 12, borderLeft: `3px solid ${iStyle(turnImpact(net)).color}` }}>
+                <div style={{ color: "var(--muted)", marginBottom: 4 }}>Round {t.roundNumber} · {isMine ? "You" : oppHandle} · +{net} Pts</div>
+                <div>{t.argument}</div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

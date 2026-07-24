@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useGame } from "@/contexts/GameContext";
+import { useGame, DEFAULT_NAV_GUARD_MESSAGE } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
 import { AppIcon } from "@/components/ui/AppIcon";
@@ -38,7 +38,7 @@ export function DailyChallenge() {
     // Leaving the tab mid-quiz shouldn't be free of consequence even
     // outside this app's own nav-guard (which only catches in-app links) —
     // this catches an actual tab close/refresh.
-    return () => { setBattleActive(false); setNavGuardOnConfirm(null); };
+    return () => { setBattleActive(false); setNavGuardOnConfirm(null); setNavGuardMessage(DEFAULT_NAV_GUARD_MESSAGE); };
   }, []);
 
   async function load() {
@@ -125,7 +125,7 @@ export function DailyChallenge() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Submission failed.");
 
-      setBattleActive(false); setNavGuardOnConfirm(null);
+      setBattleActive(false); setNavGuardOnConfirm(null); setNavGuardMessage(DEFAULT_NAV_GUARD_MESSAGE);
       setResult(data);
       setPhase("results");
 
@@ -155,7 +155,7 @@ export function DailyChallenge() {
 
       checkAchievements({ lifetimeEarnedDelta: data.score, dailyChallengesCompletedOverride: completedTotal }).catch(() => {});
     } catch (err: any) {
-      setBattleActive(false); setNavGuardOnConfirm(null);
+      setBattleActive(false); setNavGuardOnConfirm(null); setNavGuardMessage(DEFAULT_NAV_GUARD_MESSAGE);
       setError(err?.message || "Submission failed — please try again.");
       setPhase("error");
     }

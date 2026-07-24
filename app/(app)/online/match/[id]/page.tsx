@@ -23,10 +23,12 @@ import { useParams } from "next/navigation";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { scorePvpTurn, turnImpact, finalizeMatchIfComplete } from "@/lib/onlineArena";
+import { callAI, extractJSON } from "@/lib/ai";
 import { PlayerSprite } from "@/components/ui/PlayerSprite";
 import { HPBar } from "@/components/ui/HPBar";
 import { AdvBar } from "@/components/ui/AdvBar";
 import { InputPanel } from "@/components/game/InputPanel";
+import { AppIcon } from "@/components/ui/AppIcon";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 
 const supabase = createClient();
@@ -64,6 +66,13 @@ export default function OnlineMatchPage() {
   const [shakeOpp, setShakeOpp] = useState(false);
   const [leaveConfirm, setLeaveConfirm] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [showInsight, setShowInsight] = useState(false);
+  const [insightData, setInsightData] = useState<{ fallacies: any[]; weak_points: string[] } | null>(null);
+  const [insightForArg, setInsightForArg] = useState<string | null>(null); // which argument the cached insight is for
+  const [insightLoading, setInsightLoading] = useState(false);
+  const [showAce, setShowAce] = useState(false);
+  const [aceOptions, setAceOptions] = useState<{ label: string; response: string; why: string }[] | null>(null);
+  const [aceLoading, setAceLoading] = useState(false);
   const seenTurns = useRef<Set<string>>(new Set());
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingSentRef = useRef(0);
@@ -198,6 +207,12 @@ export default function OnlineMatchPage() {
   const myScore = turns.filter((t) => (t.side === "a") === iAmA).reduce((s, t) => s + Math.max(0, t.gain - t.penalty), 0);
   const oppScore = turns.filter((t) => (t.side === "a") !== iAmA).reduce((s, t) => s + Math.max(0, t.gain - t.penalty), 0);
 
+  // Whatever the OTHER side most recently said, anywhere in the match so
+  // far — null only before the very first argument of the whole match has
+  // been made. Insight Lens and Ace Card both need something to work off
+  // of; there's nothing to analyze or respond to yet if this is null.
+  const precedingOpponentArg = turns.length ? turns[turns.length - 1].argument : null;
+
   function handleInputChange(v: string) {
     setInput(v);
     if (!myTurn) return;
@@ -212,11 +227,11 @@ export default function OnlineMatchPage() {
     if (!text || !myTurn || submitting) return;
     setSubmitting(true);
     setInput("");
+    setShowInsight(false);
+    setShowAce(false);
 
-    // Whatever the OTHER side most recently said, anywhere in the match so
-    // far — null only for the very first argument of the whole match.
-    const precedingOpponentArg = turns.length ? turns[turns.length - 1].argument : null;
-
+    // Whatever the OTHER side most recently said is already computed above
+    // as precedingOpponentArg.
     const score = await scorePvpTurn(match.topic_text, mySide, text, precedingOpponentArg, Math.min(nextRoundNumber, match.rounds_total), match.rounds_total);
     const impact = turnImpact(Math.max(0, score.gain - score.penalty));
     const fallacyKey = myKey === "player_a_argument" ? "a" : "b";
@@ -242,11 +257,66 @@ export default function OnlineMatchPage() {
     setSubmitting(false);
   }
 
+  // Insight Lens is a gadget, not a consumable — same as debot mode
+  // (inventory.insightLens is a boolean there too): unlimited uses per
+  // match once the host enables it, not decremented from itemsRemaining.
+  // Cached per opponent-argument so reopening it doesn't re-burn an AI call
+  // for an identical analysis.
+  async function getInsight() {
+    if (!myTurn || !precedingOpponentArg || !(itemsRemaining.insight_lens > 0)) return;
+    if (showInsight) { setShowInsight(false); return; } // second tap: just close it
+    if (insightData && insightForArg === precedingOpponentArg) { setShowInsight(true); return; } // cached
+
+    setInsightLoading(true);
+    const sys = `You are a debate coach. Identify logical fallacies and weak points in: "${precedingOpponentArg}". Return ONLY JSON:
+{"fallacies":[{"type":"name","text":"exact short phrase"}],"weak_points":["phrase1","phrase2"]}`;
+    try {
+      const d = JSON.parse(extractJSON(await callAI(sys, "Identify fallacies and weak points.")));
+      setInsightData(d);
+      setInsightForArg(precedingOpponentArg);
+      setShowInsight(true);
+      broadcastItemUse("insight_lens");
+    } catch (e) {
+      console.error(e);
+    }
+    setInsightLoading(false);
+  }
+
+  // Ace Card — finite, spent from itemsRemaining like the other
+  // consumables. Only spent once the AI call actually comes back, so a
+  // Groq error/rate-limit doesn't cost the player a card for nothing.
+  async function getAceOptions() {
+    if (!myTurn || !precedingOpponentArg || !(itemsRemaining.ace_card > 0) || aceLoading) return;
+    setAceLoading(true);
+    const sys = `You are an expert debate coach. The player (${mySide}) responds to: "${precedingOpponentArg}". Topic: "${match.topic_text}". Return ONLY JSON:
+{"options":[{"label":"Direct Counter","response":"2-3 sentence response","why":"brief reason"},{"label":"Analytical Attack","response":"2-3 sentence response","why":"brief reason"},{"label":"Reframe","response":"2-3 sentence response","why":"brief reason"}]}`;
+    try {
+      const d = JSON.parse(extractJSON(await callAI(sys, "Give 3 options.")));
+      setAceOptions(d.options);
+      setShowAce(true);
+      setItemsRemaining((prev) => ({ ...prev, ace_card: (prev.ace_card || 0) - 1 }));
+      broadcastItemUse("ace_card");
+    } catch (e) {
+      console.error(e);
+    }
+    setAceLoading(false);
+  }
+
+  function broadcastItemUse(key: string) {
+    supabase.channel(`arena:${id}`).send({ type: "broadcast", event: "item_used", payload: { by: user?.id, byName: me?.username ? `@${me.username}` : me?.name, item: key } });
+  }
+
+  // Confidence Pill / Revival Shot still only notify for now — they'd need
+  // an actual persisted HP-adjustment mechanism (HP here is derived purely
+  // from scored damage, nothing tracks a manual heal), which is real
+  // follow-up work rather than something to fake here.
   function handleUseItem(key: string) {
+    if (key === "insight_lens") { getInsight(); return; }
+    if (key === "ace_card") { getAceOptions(); return; }
     const remaining = itemsRemaining[key] || 0;
     if (remaining <= 0) return;
     setItemsRemaining((prev) => ({ ...prev, [key]: remaining - 1 }));
-    supabase.channel(`arena:${id}`).send({ type: "broadcast", event: "item_used", payload: { by: user?.id, byName: me?.username ? `@${me.username}` : me?.name, item: key } });
+    broadcastItemUse(key);
   }
 
   async function confirmLeave() {
@@ -356,20 +426,92 @@ export default function OnlineMatchPage() {
             </div>
           )}
 
-          {itemEntries.length > 0 && (
+          {/* Insight panel */}
+          {showInsight && insightData && myTurn && (
+            <div className="card anim-fade-up" style={{ padding: 14, borderColor: "rgba(245,166,35,0.3)", background: "var(--amber-soft)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontSize: 12, color: "var(--amber)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <AppIcon token="🔍" size={12} /> Insight
+                </span>
+                <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setShowInsight(false)}>×</button>
+              </div>
+              {insightData.fallacies?.map((f: any, i: number) => (
+                <div key={i} style={{ fontSize: 12, color: "var(--red)", marginBottom: 4, display: "flex", gap: 5 }}>
+                  <AppIcon token="⚠" size={13} /><span><b>{f.type}</b>: "{f.text}"</span>
+                </div>
+              ))}
+              {insightData.weak_points?.map((wp: string, i: number) => (
+                <div key={i} style={{ fontSize: 12, color: "var(--amber)", marginBottom: 4, display: "flex", gap: 5 }}>
+                  <AppIcon token="↗" size={13} /><span>"{wp}"</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Ace Card suggested-response panel */}
+          {showAce && aceOptions && myTurn && (
+            <div className="card anim-fade-up" style={{ padding: 16, borderColor: "rgba(107,159,255,0.25)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <span style={{ fontSize: 12, color: "var(--blue)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  <AppIcon token="✨" size={12} /> Suggested Responses
+                </span>
+                <button className="btn btn-ghost btn-sm" style={{ fontSize: 11 }} onClick={() => setShowAce(false)}>×</button>
+              </div>
+              {aceOptions.map((opt, i) => (
+                <div key={i} style={{ marginBottom: 10, padding: 12, background: "var(--surface2)", borderRadius: 6, borderLeft: "2px solid var(--blue)" }}>
+                  <div style={{ fontSize: 12, color: "var(--blue)", fontWeight: 600, marginBottom: 4 }}>{opt.label}</div>
+                  <div style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.65, marginBottom: 5 }}>{opt.response}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>{opt.why}</div>
+                  <button className="btn btn-ghost btn-sm" onClick={() => { setInput(opt.response); setShowAce(false); }} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    Use this <AppIcon token="→" size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {itemEntries.length > 0 && myTurn && (
             <div className="card" style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <span style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Items</span>
-              {itemEntries.map(([key]) => (
-                <button
-                  key={key}
-                  className="btn btn-ghost btn-sm"
-                  disabled={!(itemsRemaining[key] > 0)}
-                  onClick={() => handleUseItem(key)}
-                  title="Notifies your opponent — doesn't change scoring yet"
-                >
-                  {ITEM_LABELS[key] || key} ({itemsRemaining[key] || 0})
-                </button>
-              ))}
+              {itemEntries.map(([key]) => {
+                if (key === "insight_lens") {
+                  return (
+                    <button
+                      key={key}
+                      className={`btn btn-sm ${showInsight ? "btn-primary" : "btn-ghost"}`}
+                      disabled={!precedingOpponentArg || insightLoading}
+                      onClick={getInsight}
+                      title={!precedingOpponentArg ? "Nothing to analyze yet — you're opening this match" : "Analyze your opponent's last argument"}
+                    >
+                      {insightLoading ? "Analysing…" : "Insight Lens"}
+                    </button>
+                  );
+                }
+                if (key === "ace_card") {
+                  return (
+                    <button
+                      key={key}
+                      className="btn btn-ghost btn-sm"
+                      disabled={!precedingOpponentArg || !(itemsRemaining.ace_card > 0) || aceLoading}
+                      onClick={getAceOptions}
+                      title={!precedingOpponentArg ? "Nothing to respond to yet — you're opening this match" : "Get 3 suggested responses"}
+                    >
+                      {aceLoading ? "Generating…" : `Ace Card (${itemsRemaining.ace_card || 0})`}
+                    </button>
+                  );
+                }
+                return (
+                  <button
+                    key={key}
+                    className="btn btn-ghost btn-sm"
+                    disabled={!(itemsRemaining[key] > 0)}
+                    onClick={() => handleUseItem(key)}
+                    title="Notifies your opponent — doesn't change scoring yet"
+                  >
+                    {ITEM_LABELS[key] || key} ({itemsRemaining[key] || 0})
+                  </button>
+                );
+              })}
             </div>
           )}
 

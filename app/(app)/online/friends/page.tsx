@@ -12,6 +12,7 @@ import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { AppIcon } from "@/components/ui/AppIcon";
 import { callAI, extractJSON } from "@/lib/ai";
+import { expireStaleInvites } from "@/lib/matchInvites";
 
 const supabase = createClient();
 
@@ -80,6 +81,12 @@ export default function OnlineFriendsPage() {
   async function sendInvite(target: ProfileLite, roundsTotal: number, allowedItems: Record<string, number>, topicText: string, hostSide: "FOR" | "AGAINST", firstArguerIsHost: boolean) {
     if (!user) return;
 
+    // Flip anything actually past its 10-minute expiry to 'expired' first —
+    // otherwise a stale invite that was never explicitly resolved (never
+    // accepted/declined, just abandoned by testing) sits there as
+    // "pending" forever and blocks every future challenge to that friend.
+    await expireStaleInvites();
+
     // Block a second live challenge to the same friend — this is what
     // actually caused the "two different matches" bug last time: nothing
     // stopped a retry while the first invite was still pending, and each
@@ -91,10 +98,18 @@ export default function OnlineFriendsPage() {
       .eq("invitee_id", target.id)
       .in("status", ["pending", "accepted"]);
     for (const inv of existingInvites || []) {
-      if (inv.status === "pending") { setActionError(`You already have a pending challenge to @${target.username}.`); return; }
+      if (inv.status === "pending") {
+        console.error("Blocked by pending invite:", inv);
+        setActionError(`You already have a pending challenge to @${target.username}.`);
+        return;
+      }
       if (inv.match_id) {
         const { data: m } = await supabase.from("online_matches").select("status").eq("id", inv.match_id).maybeSingle();
-        if (m && m.status !== "completed" && m.status !== "abandoned") { setActionError(`You already have a match in progress with @${target.username}.`); return; }
+        if (m && m.status !== "completed" && m.status !== "abandoned") {
+          console.error("Blocked by match:", inv.match_id, m.status);
+          setActionError(`You already have a match in progress with @${target.username}.`);
+          return;
+        }
       }
     }
 

@@ -94,7 +94,7 @@ export default function OnlineFriendsPage() {
       if (inv.status === "pending") { setActionError(`You already have a pending challenge to @${target.username}.`); return; }
       if (inv.match_id) {
         const { data: m } = await supabase.from("online_matches").select("status").eq("id", inv.match_id).maybeSingle();
-        if (m && m.status !== "completed") { setActionError(`You already have a match in progress with @${target.username}.`); return; }
+        if (m && m.status !== "completed" && m.status !== "abandoned") { setActionError(`You already have a match in progress with @${target.username}.`); return; }
       }
     }
 

@@ -46,7 +46,7 @@ export default function OnlineFriendsPage() {
   const [challengeTarget, setChallengeTarget] = useState<ProfileLite | null>(null);
   const [inviteSentTo, setInviteSentTo] = useState<string | null>(null);
 
-  async function sendInvite(target: ProfileLite, roundsTotal: number, allowedItems: Record<string, number>, topicText: string) {
+  async function sendInvite(target: ProfileLite, roundsTotal: number, allowedItems: Record<string, number>, topicText: string, hostSide: "FOR" | "AGAINST", firstArguerIsHost: boolean) {
     if (!user) return;
     const { error } = await supabase.from("match_invites").insert({
       host_id: user.id,
@@ -54,6 +54,8 @@ export default function OnlineFriendsPage() {
       rounds_total: roundsTotal,
       allowed_items: allowedItems,
       topic_text: topicText,
+      host_side: hostSide,
+      first_arguer_is_host: firstArguerIsHost,
     });
     if (error) { setActionError("Failed to send challenge."); return; }
     setChallengeTarget(null);
@@ -231,7 +233,7 @@ export default function OnlineFriendsPage() {
         <ChallengeSetup
           target={challengeTarget}
           onCancel={() => setChallengeTarget(null)}
-          onSend={(rounds, items, topic) => sendInvite(challengeTarget, rounds, items, topic)}
+          onSend={(rounds, items, topic, hostSide, firstArguerIsHost) => sendInvite(challengeTarget, rounds, items, topic, hostSide, firstArguerIsHost)}
         />
       )}
     </div>
@@ -241,11 +243,13 @@ export default function OnlineFriendsPage() {
 function ChallengeSetup({ target, onCancel, onSend }: {
   target: ProfileLite;
   onCancel: () => void;
-  onSend: (roundsTotal: number, allowedItems: Record<string, number>, topicText: string) => void;
+  onSend: (roundsTotal: number, allowedItems: Record<string, number>, topicText: string, hostSide: "FOR" | "AGAINST", firstArguerIsHost: boolean) => void;
 }) {
   const [rounds, setRounds] = useState(5);
   const [items, setItems] = useState<Record<string, number>>({});
   const [topic, setTopic] = useState("");
+  const [hostSide, setHostSide] = useState<"FOR" | "AGAINST">("FOR");
+  const [firstArguerIsHost, setFirstArguerIsHost] = useState(true);
 
   function setItemCount(key: string, count: number) {
     setItems((prev) => {
@@ -264,6 +268,21 @@ function ChallengeSetup({ target, onCancel, onSend }: {
 
         <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Topic</label>
         <input className="input-field" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="What are you debating?" style={{ marginBottom: 16 }} />
+
+        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Your side</label>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button className={`btn btn-sm ${hostSide === "FOR" ? "btn-primary" : "btn-ghost"}`} style={{ flex: 1 }} onClick={() => setHostSide("FOR")}>▲ For</button>
+          <button className={`btn btn-sm ${hostSide === "AGAINST" ? "btn-danger" : "btn-ghost"}`} style={{ flex: 1 }} onClick={() => setHostSide("AGAINST")}>▼ Against</button>
+        </div>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: -12, marginBottom: 16 }}>
+          @{target.username} automatically argues the opposite side.
+        </div>
+
+        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Who goes first</label>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <button className={`btn btn-sm ${firstArguerIsHost ? "btn-primary" : "btn-ghost"}`} style={{ flex: 1 }} onClick={() => setFirstArguerIsHost(true)}>You</button>
+          <button className={`btn btn-sm ${!firstArguerIsHost ? "btn-primary" : "btn-ghost"}`} style={{ flex: 1 }} onClick={() => setFirstArguerIsHost(false)}>@{target.username}</button>
+        </div>
 
         <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Number of rounds</label>
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
@@ -299,7 +318,7 @@ function ChallengeSetup({ target, onCancel, onSend }: {
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={!topic.trim()} onClick={() => onSend(rounds, items, topic.trim())}>Send Challenge</button>
+          <button className="btn btn-primary btn-sm" style={{ flex: 1 }} disabled={!topic.trim()} onClick={() => onSend(rounds, items, topic.trim(), hostSide, firstArguerIsHost)}>Send Challenge</button>
           <button className="btn btn-ghost btn-sm" onClick={onCancel}>Cancel</button>
         </div>
       </div>

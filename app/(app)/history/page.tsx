@@ -299,15 +299,52 @@ export default function HistoryPage() {
           <div style={{ fontSize: 13, color: "var(--muted)" }}>No Daily Challenge attempts yet.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {dailyHistory.map((d: any) => (
-              <div key={d.id} className="card" style={{ padding: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{d.challenge_date}</div>
-                  <div style={{ fontSize: 11, color: "var(--muted)" }}>{d.correct_count} / {d.total_questions} correct</div>
+            {dailyHistory.map((d: any) => {
+              const expanded = expandedMatchId === d.id;
+              const answers = Array.isArray(d.answers) ? d.answers : [];
+              return (
+                <div key={d.id} className="card" style={{ padding: 14 }}>
+                  <div
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: answers.length ? "pointer" : "default" }}
+                    onClick={() => answers.length && setExpandedMatchId(expanded ? null : d.id)}
+                  >
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{d.challenge_date}</div>
+                      <div style={{ fontSize: 11, color: "var(--muted)" }}>{d.correct_count} / {d.total_questions} correct</div>
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "var(--blue)" }}>+{d.score}</div>
+                  </div>
+
+                  {expanded && (
+                    <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+                      {answers.map((a: any, i: number) => (
+                        <div key={i} style={{ fontSize: 12, background: "var(--faint)", borderRadius: 6, padding: 10 }}>
+                          <div style={{ marginBottom: 6, fontWeight: 600 }}>{i + 1}. {a.question}</div>
+                          {a.options.map((opt: string, oi: number) => {
+                            const isChosen = a.chosen_index === oi;
+                            const isCorrect = a.correct_index === oi;
+                            return (
+                              <div
+                                key={oi}
+                                style={{
+                                  padding: "4px 8px", marginBottom: 3, borderRadius: 4,
+                                  color: isCorrect ? "var(--green, #2f9e58)" : isChosen ? "var(--red)" : "var(--muted)",
+                                  fontWeight: isChosen || isCorrect ? 700 : 400,
+                                  background: isCorrect ? "rgba(47,158,88,0.1)" : isChosen ? "rgba(255,112,112,0.1)" : "transparent",
+                                }}
+                              >
+                                {opt} {isChosen && !isCorrect ? "(your answer)" : ""} {isCorrect ? "(correct)" : ""}
+                              </div>
+                            );
+                          })}
+                          {a.chosen_index === null && <div style={{ color: "var(--muted)", fontStyle: "italic" }}>Not answered</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--blue)" }}>+{d.score}</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )
       )}

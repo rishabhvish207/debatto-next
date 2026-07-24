@@ -77,6 +77,18 @@ export async function POST(req: Request) {
     const rewardPerCorrect = await getRewardPerCorrect();
     const score = correctCount * rewardPerCorrect;
 
+    // Full per-question detail for the Daily Challenge history tab —
+    // question/options are snapshotted here (not just referenced by date)
+    // so history stays accurate even if that date's question set is ever
+    // edited or removed later.
+    const answerDetail = questions.map((q, i) => ({
+      question: q.text,
+      options: q.options,
+      chosen_index: answers[i] ?? null,
+      correct_index: q.correctIndex,
+      is_correct: answers[i] === q.correctIndex,
+    }));
+
     if (userId) {
       const { error: insertError } = await supabaseAdmin.from("daily_challenge_attempts").insert({
         user_id: userId,
@@ -84,6 +96,7 @@ export async function POST(req: Request) {
         score,
         correct_count: correctCount,
         total_questions: questions.length,
+        answers: answerDetail,
       });
       // A unique-violation here means a second, near-simultaneous submit
       // from the same user lost a race with this one — treat it exactly
@@ -97,7 +110,7 @@ export async function POST(req: Request) {
       }
     }
 
-    return NextResponse.json({ correctCount, totalQuestions: questions.length, score, rewardPerCorrect, results });
+    return NextResponse.json({ correctCount, totalQuestions: questions.length, score, rewardPerCorrect, results, answers: answerDetail });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

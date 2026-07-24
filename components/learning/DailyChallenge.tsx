@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
@@ -16,7 +16,7 @@ type SubmitResult = { correctCount: number; totalQuestions: number; score: numbe
 type Phase = "loading" | "intro" | "already-done" | "in-progress" | "submitting" | "results" | "error";
 
 export function DailyChallenge() {
-  const { user, earnCoins, checkAchievements, dailyChallengeRewardPerCorrect, setBattleActive, setNavGuardMessage } = useGame();
+  const { user, earnCoins, checkAchievements, dailyChallengeRewardPerCorrect, setBattleActive, setNavGuardMessage, setNavGuardOnConfirm } = useGame();
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [challengeDate, setChallengeDate] = useState("");
@@ -26,12 +26,19 @@ export function DailyChallenge() {
   const [result, setResult] = useState<SubmitResult | null>(null);
   const [error, setError] = useState("");
 
+  // Confirming the nav-guard mid-quiz needs whatever's been answered SO
+  // FAR, not whatever `answers` was when the guard callback was first
+  // registered — a ref stays current across renders without having to
+  // re-register the callback on every single answer.
+  const answersRef = useRef<(number | null)[]>([]);
+  useEffect(() => { answersRef.current = answers; }, [answers]);
+
   useEffect(() => {
     load();
     // Leaving the tab mid-quiz shouldn't be free of consequence even
     // outside this app's own nav-guard (which only catches in-app links) —
     // this catches an actual tab close/refresh.
-    return () => { setBattleActive(false); };
+    return () => { setBattleActive(false); setNavGuardOnConfirm(null); };
   }, []);
 
   async function load() {
@@ -80,9 +87,14 @@ export function DailyChallenge() {
     setAnswers(new Array(questions.length).fill(null));
     setBattleActive(true);
     setNavGuardMessage({
-      title: "Leave the Daily Challenge?",
-      message: "Leaving now forfeits today's attempt — you won't be able to retry until tomorrow.",
+      title: "Submit today's Daily Challenge?",
+      message: "You'll be graded on whatever you've answered so far, and won't be able to retry until tomorrow.",
+      confirmLabel: "Submit",
     });
+    // Confirming the guard submits current progress rather than just
+    // abandoning it — reads answersRef so it's always current progress,
+    // not whatever `answers` was at the moment start() ran.
+    setNavGuardOnConfirm(() => () => submit(answersRef.current));
     setPhase("in-progress");
   }
 
@@ -113,7 +125,7 @@ export function DailyChallenge() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Submission failed.");
 
-      setBattleActive(false);
+      setBattleActive(false); setNavGuardOnConfirm(null);
       setResult(data);
       setPhase("results");
 
@@ -143,7 +155,7 @@ export function DailyChallenge() {
 
       checkAchievements({ lifetimeEarnedDelta: data.score, dailyChallengesCompletedOverride: completedTotal }).catch(() => {});
     } catch (err: any) {
-      setBattleActive(false);
+      setBattleActive(false); setNavGuardOnConfirm(null);
       setError(err?.message || "Submission failed — please try again.");
       setPhase("error");
     }

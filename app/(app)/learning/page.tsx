@@ -7,6 +7,7 @@
 //   Game Guide       — an in-app explainer for how Debatto itself works
 
 import { useState } from "react";
+import { useGame } from "@/contexts/GameContext";
 import { Documentation } from "@/components/learning/Documentation";
 import { DailyChallenge } from "@/components/learning/DailyChallenge";
 import { AiTutor } from "@/components/learning/AiTutor";
@@ -15,6 +16,7 @@ import { GameGuide } from "@/components/learning/GameGuide";
 type Section = "daily" | "docs" | "guide" | "tutor";
 
 export default function LearningPage() {
+  const { requestNavigation } = useGame();
   const [section, setSection] = useState<Section>("daily");
 
   return (
@@ -33,7 +35,7 @@ export default function LearningPage() {
         ] as const).map(([s, label]) => (
           <button
             key={s}
-            onClick={() => setSection(s)}
+            onClick={() => requestNavigation(() => setSection(s))}
             style={{
               background: "none", border: "none", cursor: "pointer",
               padding: "0 2px 12px", fontSize: 13, fontWeight: 700,

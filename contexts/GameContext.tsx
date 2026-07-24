@@ -14,7 +14,7 @@
 // Debatto.tsx — behavior is unchanged, just relocated so it's shared
 // instead of duplicated.
 
-import { createContext, useContext, useEffect, useRef, useState, ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, ReactNode, Dispatch, SetStateAction } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { saveGameData, loadGameData, syncLocalToDB, loadPinnedTopics, togglePinnedTopic, deleteTopic as deleteTopicRecord, loadHiddenTopics } from "@/lib/persistenceManager";
 import { GAME_CONFIG, DEFAULT_STORE_ITEMS, StoreItemDef, computeItemPrice } from "@/config/Game";
@@ -146,8 +146,9 @@ type GameContextValue = {
   cancelNavigation: () => void;
 
   battleActive: boolean;
-  navGuardMessage: { title: string; message: string };
-  setNavGuardMessage: (m: { title: string; message: string }) => void;
+  navGuardMessage: { title: string; message: string; confirmLabel: string };
+  setNavGuardMessage: (m: { title: string; message: string; confirmLabel: string }) => void;
+  setNavGuardOnConfirm: Dispatch<SetStateAction<(() => void | Promise<void>) | null>>;
   setBattleActive: (active: boolean) => void;
 
   apiError: string;
@@ -188,6 +189,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [siteBg, setSiteBg] = useState<{ url: string | null; opacity: number; applyEverywhere: boolean }>({ url: null, opacity: 0.16, applyEverywhere: false });
   const [dailyChallengeRewardPerCorrect, setDailyChallengeRewardPerCorrect] = useState(DEFAULT_REWARD_PER_CORRECT);
   const [pendingNavAction, setPendingNavAction] = useState<(() => void) | null>(null);
+  // Runs (and is awaited) right before the pending nav action, only when
+  // set — lets a screen do something real on "confirm" instead of the
+  // guard only ever meaning "abandon and lose it." Daily Challenge sets
+  // this to submit whatever's been answered so far rather than just
+  // discarding it; anything that doesn't set this keeps the old
+  // abandon-on-confirm behavior (e.g. the debot arena's Exit button).
+  const [navGuardOnConfirm, setNavGuardOnConfirm] = useState<(() => void | Promise<void>) | null>(null);
 
   // Any navigation that might leave an in-progress match (drawer links, the
   // header logo, the in-match Exit button, browser back) should go through
@@ -200,10 +208,13 @@ export function GameProvider({ children }: { children: ReactNode }) {
       action();
     }
   }
-  function confirmNavigation() {
+  async function confirmNavigation() {
     setBattleActive(false);
     const action = pendingNavAction;
+    const onConfirmExtra = navGuardOnConfirm;
     setPendingNavAction(null);
+    setNavGuardOnConfirm(null);
+    if (onConfirmExtra) await onConfirmExtra();
     action?.();
   }
   function cancelNavigation() {
@@ -218,6 +229,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
   const [navGuardMessage, setNavGuardMessage] = useState({
     title: "Exit this match?",
     message: "Leaving now will end the debate and lose your progress in this round.",
+    confirmLabel: "Exit anyway",
   });
 
   const savingTopicRef = useRef(false);
@@ -1344,6 +1356,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         battleActive,
         navGuardMessage,
         setNavGuardMessage,
+        setNavGuardOnConfirm,
         setBattleActive,
         apiError,
         setApiError,

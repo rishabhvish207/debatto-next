@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { AppIcon } from "@/components/ui/AppIcon";
+import { callAI, extractJSON } from "@/lib/ai";
 
 const supabase = createClient();
 
@@ -68,6 +69,12 @@ export default function OnlineFriendsPage() {
     const oppId = data.player_a === user.id ? data.player_b : data.player_a;
     const { data: opp } = await supabase.from("public_profiles").select("name, username").eq("id", oppId).maybeSingle();
     setOngoingMatch({ id: data.id, opponentName: opp?.username ? `@${opp.username}` : opp?.name || "opponent" });
+  }
+
+  async function cancelOngoingMatch(matchId: string) {
+    const { error } = await supabase.from("online_matches").update({ status: "abandoned", completed_at: new Date().toISOString() }).eq("id", matchId);
+    if (error) { console.error(error); setActionError("Failed to forfeit the match."); return; }
+    loadOngoingMatch();
   }
 
   async function sendInvite(target: ProfileLite, roundsTotal: number, allowedItems: Record<string, number>, topicText: string, hostSide: "FOR" | "AGAINST", firstArguerIsHost: boolean) {
@@ -229,14 +236,13 @@ export default function OnlineFriendsPage() {
       <h2 className="heading" style={{ fontSize: 22, marginBottom: 16 }}>Friends</h2>
 
       {ongoingMatch && (
-        <Link
-          href={`/online/match/${ongoingMatch.id}`}
-          className="card"
-          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: 14, marginBottom: 16, borderColor: "var(--blue-soft)" }}
-        >
+        <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: 14, marginBottom: 16, borderColor: "var(--blue-soft)" }}>
           <span style={{ fontSize: 13, fontWeight: 600 }}>Match in progress vs {ongoingMatch.opponentName}</span>
-          <span className="btn btn-primary btn-sm">Resume</span>
-        </Link>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => cancelOngoingMatch(ongoingMatch.id)}>Forfeit</button>
+            <Link href={`/online/match/${ongoingMatch.id}`} className="btn btn-primary btn-sm">Resume</Link>
+          </div>
+        </div>
       )}
 
       <div className="card" style={{ padding: 14, marginBottom: 20 }}>
@@ -318,11 +324,44 @@ function ChallengeSetup({ target, error, onCancel, onSend }: {
   onCancel: () => void;
   onSend: (roundsTotal: number, allowedItems: Record<string, number>, topicText: string, hostSide: "FOR" | "AGAINST", firstArguerIsHost: boolean) => void;
 }) {
+  const { topics } = useGame();
   const [rounds, setRounds] = useState(5);
   const [items, setItems] = useState<Record<string, number>>({});
   const [topic, setTopic] = useState("");
   const [hostSide, setHostSide] = useState<"FOR" | "AGAINST">("FOR");
   const [firstArguerIsHost, setFirstArguerIsHost] = useState(true);
+
+  // Same AI topic search debot mode's setup screen uses — see
+  // searchTopicsWithAI in app/(app)/offline/page.tsx.
+  const [aiQuery, setAiQuery] = useState("");
+  const [aiSearching, setAiSearching] = useState(false);
+  const [aiSuggestions, setAiSuggestions] = useState<{ text: string; cat: string }[] | null>(null);
+  const [aiError, setAiError] = useState("");
+  const [showBrowse, setShowBrowse] = useState(false);
+  const [browseFilter, setBrowseFilter] = useState("");
+
+  async function searchTopicsWithAI() {
+    const query = aiQuery.trim();
+    if (!query || aiSearching) return;
+    setAiSearching(true);
+    setAiSuggestions(null);
+    setAiError("");
+    const sys = `You are a debate topic curator. Given a keyword or partial sentence, suggest 5 sharp, debatable propositions related to it. Return ONLY JSON:
+{"topics":[{"text":"proposition as a clear statement","cat":"short category label"}]}`;
+    try {
+      const raw = await callAI(sys, `Keyword/phrase: "${query}"`);
+      const parsed = JSON.parse(extractJSON(raw));
+      setAiSuggestions(Array.isArray(parsed.topics) ? parsed.topics : []);
+    } catch (err) {
+      console.error(err);
+      setAiError("AI topic search failed. Please try again.");
+    }
+    setAiSearching(false);
+  }
+
+  const filteredExisting = (topics || []).filter((t: any) =>
+    !browseFilter.trim() || (t.text || "").toLowerCase().includes(browseFilter.trim().toLowerCase())
+  );
 
   function setItemCount(key: string, count: number) {
     setItems((prev) => {
@@ -340,7 +379,49 @@ function ChallengeSetup({ target, error, onCancel, onSend }: {
         <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 16 }}>They'll see this setup before accepting.</div>
 
         <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Topic</label>
-        <input className="input-field" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="What are you debating?" style={{ marginBottom: 16 }} />
+        <input className="input-field" value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="What are you debating?" style={{ marginBottom: 10 }} />
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <input
+            className="input-field"
+            value={aiQuery}
+            onChange={(e) => setAiQuery(e.target.value)}
+            placeholder="Search AI for a topic idea…"
+            style={{ flex: 1 }}
+            onKeyDown={(e) => { if (e.key === "Enter") searchTopicsWithAI(); }}
+          />
+          <button className="btn btn-ghost btn-sm" disabled={!aiQuery.trim() || aiSearching} onClick={searchTopicsWithAI}>
+            {aiSearching ? "Searching…" : <><AppIcon token="✨" size={13} /> Search AI</>}
+          </button>
+        </div>
+        {aiError && <div style={{ fontSize: 11, color: "var(--red)", marginBottom: 10 }}>{aiError}</div>}
+        {aiSuggestions && aiSuggestions.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+            {aiSuggestions.map((s, i) => (
+              <button key={i} className="btn btn-ghost btn-sm" style={{ textAlign: "left", justifyContent: "flex-start" }} onClick={() => { setTopic(s.text); setAiSuggestions(null); }}>
+                {s.text} <span style={{ color: "var(--muted)", marginLeft: 6 }}>{s.cat}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowBrowse((v) => !v)} style={{ marginBottom: showBrowse ? 8 : 16 }}>
+          {showBrowse ? "Hide" : "Browse"} existing debot topics
+        </button>
+        {showBrowse && (
+          <div style={{ marginBottom: 16 }}>
+            <input className="input-field" value={browseFilter} onChange={(e) => setBrowseFilter(e.target.value)} placeholder="Filter…" style={{ marginBottom: 8 }} />
+            <div style={{ maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+              {filteredExisting.length === 0 ? (
+                <div style={{ fontSize: 12, color: "var(--muted)" }}>No topics found.</div>
+              ) : filteredExisting.map((t: any, i: number) => (
+                <button key={t.id || i} className="btn btn-ghost btn-sm" style={{ textAlign: "left", justifyContent: "flex-start" }} onClick={() => { setTopic(t.text); setShowBrowse(false); }}>
+                  {t.text}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Your side</label>
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>

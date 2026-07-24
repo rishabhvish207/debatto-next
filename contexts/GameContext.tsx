@@ -71,6 +71,8 @@ type GameContextValue = {
   onlineUserIds: Set<string>; // live presence — profile ids currently connected app-wide
   incomingInvite: MatchInvite | null; // most recent live Friend Match invite popup — see InvitePopup
   setIncomingInvite: (invite: MatchInvite | null) => void;
+  hostMatchReady: string | null; // set the instant a HOST's own sent invite gets accepted — see HostMatchRedirect
+  setHostMatchReady: (matchId: string | null) => void;
 
   opps: any[];
   oppsLoading: boolean;
@@ -481,6 +483,34 @@ export function GameProvider({ children }: { children: ReactNode }) {
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "match_invites", filter: `invitee_id=eq.${user.id}` },
         (payload: any) => setIncomingInvite(payload.new as MatchInvite)
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id]);
+
+  // ── FRIEND MATCH: host gets pulled in the instant their invite is accepted ──
+  //
+  // The invitee's client is the one that creates the online_matches row
+  // (via the finalize_invite_into_match RPC — see lib/matchInvites.ts), so
+  // without this the host would just have to notice on their own and go
+  // find the match. Watching for match_invites transitioning from
+  // "no match_id yet" to "match_id set" on the HOST's own sent invites
+  // means they get pulled in automatically too, from wherever they are in
+  // the app — HostMatchRedirect (mounted in the app shell) is what actually
+  // does the navigation once this fires.
+  const [hostMatchReady, setHostMatchReady] = useState<string | null>(null);
+  useEffect(() => {
+    if (!user?.id) { setHostMatchReady(null); return; }
+
+    const channel = supabase
+      .channel(`host-invite-listen:${user.id}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "match_invites", filter: `host_id=eq.${user.id}` },
+        (payload: any) => {
+          if (payload.new?.match_id && !payload.old?.match_id) setHostMatchReady(payload.new.match_id);
+        }
       )
       .subscribe();
 
@@ -1254,6 +1284,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         onlineUserIds,
         incomingInvite,
         setIncomingInvite,
+        hostMatchReady,
+        setHostMatchReady,
         opps,
         oppsLoading,
         unlockDebot,

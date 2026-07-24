@@ -168,6 +168,9 @@ export default function NotificationsPage() {
                   <div key={i.id} className="card" style={{ padding: 14 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>@{host?.username || "unknown"} challenged you</div>
                     <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>"{i.topic_text}" · {i.rounds_total} rounds</div>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
+                      You'll argue <b style={{ color: "var(--text)" }}>{i.host_side === "FOR" ? "AGAINST" : "FOR"}</b> · {i.first_arguer_is_host ? "they go first" : "you go first"}
+                    </div>
                     {itemEntries.length > 0 && (
                       <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
                         {itemEntries.map(([k, c]) => `${c}× ${ITEM_LABELS[k] || k}`).join(", ")}

@@ -5,6 +5,14 @@
 // Notifications page so the same "waiting for host" resume logic can also
 // run from a presence-change effect (host comes back online later) without
 // duplicating the match-creation code.
+//
+// finalizeInviteIntoMatch calls a server-side RPC rather than inserting
+// from the client — see finalize_invite_into_match in the SQL migrations
+// for why: more than one client-side trigger could reach this for the same
+// invite (the popup, the Notifications page, its auto-resume effect), and
+// nothing serialized them against each other, so it was possible to create
+// two different matches for one invite. The RPC row-locks the invite and
+// makes that impossible.
 
 import { createClient } from "@/utils/supabase/client";
 
@@ -18,6 +26,8 @@ export type MatchInvite = {
   rounds_total: number;
   allowed_items: Record<string, number>;
   topic_text: string;
+  first_arguer_is_host: boolean;
+  host_side: "FOR" | "AGAINST";
   match_id: string | null;
   created_at: string;
   expires_at: string;
@@ -35,36 +45,14 @@ export async function expireStaleInvites() {
 
 // Called once the invitee has accepted AND the host is confirmed online
 // (checked by the caller against GameContext's onlineUserIds — this
-// function doesn't know about presence itself). Idempotent: if match_id is
-// already set, does nothing and just returns it, so it's safe to call this
-// again from a "host came back online" effect without double-creating.
+// function doesn't know about presence itself). Idempotent AND
+// concurrency-safe: the RPC row-locks the invite, so no matter how many
+// times or from how many places this gets called for the same invite, only
+// one online_matches row is ever created.
 export async function finalizeInviteIntoMatch(invite: MatchInvite): Promise<{ ok: boolean; matchId?: string; error?: string }> {
-  if (invite.match_id) return { ok: true, matchId: invite.match_id };
-
-  const { data: match, error: matchErr } = await supabase
-    .from("online_matches")
-    .insert({
-      mode: "friend",
-      status: "active",
-      host_id: invite.host_id,
-      player_a: invite.host_id,
-      player_b: invite.invitee_id,
-      topic_text: invite.topic_text,
-      rounds_total: invite.rounds_total,
-      first_arguer: invite.host_id, // host always starts a friend match
-      allowed_items: invite.allowed_items,
-    })
-    .select("id")
-    .single();
-  if (matchErr || !match) return { ok: false, error: matchErr?.message || "Failed to create match." };
-
-  const { error: updateErr } = await supabase
-    .from("match_invites")
-    .update({ match_id: match.id })
-    .eq("id", invite.id);
-  if (updateErr) return { ok: false, error: updateErr.message };
-
-  return { ok: true, matchId: match.id };
+  const { data, error } = await supabase.rpc("finalize_invite_into_match", { p_invite_id: invite.id });
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, matchId: data as string };
 }
 
 export async function respondToInvite(invite: MatchInvite, accept: boolean, onlineUserIds: Set<string>): Promise<{ ok: boolean; matchId?: string; waitingForHost?: boolean; error?: string }> {

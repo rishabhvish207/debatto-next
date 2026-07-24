@@ -69,6 +69,9 @@ export function InvitePopup() {
           <div style={{ fontSize: 13, fontWeight: 700 }}>{hostName || "A friend"} challenged you to a Friend Match</div>
         </div>
         <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>"{incomingInvite.topic_text}"</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>
+          You'll argue <b style={{ color: "var(--text)" }}>{incomingInvite.host_side === "FOR" ? "AGAINST" : "FOR"}</b> · {incomingInvite.first_arguer_is_host ? "they go first" : "you go first"}
+        </div>
         <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
           {incomingInvite.rounds_total} rounds
           {itemEntries.length > 0 && (

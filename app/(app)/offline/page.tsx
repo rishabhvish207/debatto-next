@@ -116,6 +116,7 @@ export default function OfflinePage() {
   const [hintData, setHintData] = useState<any>(null);
   const [hintRound, setHintRound] = useState<number | null>(null); // which round hintData was generated for — reused on repeat opens within the same round instead of re-calling the AI
   const [showHint, setShowHint] = useState(false);
+  const [showRoundHistory, setShowRoundHistory] = useState(false);
   const [showAns, setShowAns] = useState(false);
   const [ansData, setAnsData] = useState<any>(null);
   const [pendingOppDamage, setPendingOppDamage] = useState<any>(null);
@@ -927,6 +928,33 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
             rounds={rounds}
             textRef={textRef}
           />
+        )}
+
+        {/* Round history, collapsed by default — this was requested to
+            replace relying on the phase reveal cards alone as the only
+            record of what happened; those stay as the primary in-the-moment
+            feedback, this is just a persistent log you can check any time. */}
+        {history.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowRoundHistory((v) => !v)} style={{ marginBottom: showRoundHistory ? 8 : 0 }}>
+              {showRoundHistory ? "Hide" : "Show"} round history ({history.length})
+            </button>
+            {showRoundHistory && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {history.slice().reverse().map((h: any, i: number) => {
+                  const impact = h.eval?.impact || "Ineffective";
+                  const style = iStyle(impact);
+                  return (
+                    <div key={i} className="card" style={{ padding: 12, fontSize: 12, borderLeft: `3px solid ${style.color}` }}>
+                      <div style={{ color: "var(--muted)", marginBottom: 4 }}>Round {h.round} · {impact} · +{h.net ?? 0} you / +{h.oNet ?? 0} them</div>
+                      <div style={{ marginBottom: 3 }}><b>You:</b> {h.pArg}</div>
+                      <div><b>{opp?.name}:</b> {h.oppArg}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
       </div>
     );

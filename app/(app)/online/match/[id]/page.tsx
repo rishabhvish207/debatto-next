@@ -50,7 +50,7 @@ type Turn = { side: "a" | "b"; roundNumber: number; argument: string; gain: numb
 
 export default function OnlineMatchPage() {
   const { id } = useParams<{ id: string }>();
-  const { user } = useGame();
+  const { user, storeItems } = useGame();
 
   const [match, setMatch] = useState<any>(null);
   const [rounds, setRounds] = useState<any[]>([]);
@@ -195,22 +195,30 @@ export default function OnlineMatchPage() {
     }
   }
 
-  // HP derived from cumulative damage taken across all scored turns so far.
-  let myHP = MAX_HP, oppHP = MAX_HP;
+  // Raw damage taken from scored turns — heal (Confidence Pill/Revival
+  // Shot, persisted on the match row so both sides see it) is applied on
+  // top of this separately, same two-step debot mode effectively uses
+  // (damage always lands, then whatever heal you've used offsets it).
+  let myDamageTaken = 0, oppDamageTaken = 0;
   for (const t of turns) {
     const net = Math.max(0, t.gain - t.penalty);
     const dmg = Math.round(net * DAMAGE_MULTIPLIER);
     const dealtToMe = (t.side === "a") !== iAmA;
-    if (dealtToMe) myHP = Math.max(0, myHP - dmg); else oppHP = Math.max(0, oppHP - dmg);
+    if (dealtToMe) myDamageTaken += dmg; else oppDamageTaken += dmg;
   }
+  const myHeal = (iAmA ? match.player_a_heal : match.player_b_heal) || 0;
+  const oppHeal = (iAmA ? match.player_b_heal : match.player_a_heal) || 0;
+  const myHP = Math.max(0, Math.min(MAX_HP, MAX_HP - myDamageTaken + myHeal));
+  const oppHP = Math.max(0, Math.min(MAX_HP, MAX_HP - oppDamageTaken + oppHeal));
 
   const myScore = turns.filter((t) => (t.side === "a") === iAmA).reduce((s, t) => s + Math.max(0, t.gain - t.penalty), 0);
   const oppScore = turns.filter((t) => (t.side === "a") !== iAmA).reduce((s, t) => s + Math.max(0, t.gain - t.penalty), 0);
 
   // Whatever the OTHER side most recently said, anywhere in the match so
   // far — null only before the very first argument of the whole match has
-  // been made. Insight Lens and Ace Card both need something to work off
-  // of; there's nothing to analyze or respond to yet if this is null.
+  // been made. Insight Lens needs something to work off of; there's
+  // nothing to analyze yet if this is null (Ace Card is fine either way —
+  // it falls back to suggesting an opening statement).
   const precedingOpponentArg = turns.length ? turns[turns.length - 1].argument : null;
 
   function handleInputChange(v: string) {
@@ -283,13 +291,18 @@ export default function OnlineMatchPage() {
   }
 
   // Ace Card — finite, spent from itemsRemaining like the other
-  // consumables. Only spent once the AI call actually comes back, so a
+  // consumables. Works with or without something to respond to: if this is
+  // the opening argument of the match, it suggests strong openings instead
+  // of rebuttals. Only spent once the AI call actually comes back, so a
   // Groq error/rate-limit doesn't cost the player a card for nothing.
   async function getAceOptions() {
-    if (!myTurn || !precedingOpponentArg || !(itemsRemaining.ace_card > 0) || aceLoading) return;
+    if (!myTurn || !(itemsRemaining.ace_card > 0) || aceLoading) return;
     setAceLoading(true);
-    const sys = `You are an expert debate coach. The player (${mySide}) responds to: "${precedingOpponentArg}". Topic: "${match.topic_text}". Return ONLY JSON:
-{"options":[{"label":"Direct Counter","response":"2-3 sentence response","why":"brief reason"},{"label":"Analytical Attack","response":"2-3 sentence response","why":"brief reason"},{"label":"Reframe","response":"2-3 sentence response","why":"brief reason"}]}`;
+    const sys = precedingOpponentArg
+      ? `You are an expert debate coach. The player (${mySide}) responds to: "${precedingOpponentArg}". Topic: "${match.topic_text}". Return ONLY JSON:
+{"options":[{"label":"Direct Counter","response":"2-3 sentence response","why":"brief reason"},{"label":"Analytical Attack","response":"2-3 sentence response","why":"brief reason"},{"label":"Reframe","response":"2-3 sentence response","why":"brief reason"}]}`
+      : `You are an expert debate coach. The player is opening a debate arguing ${mySide} the proposition: "${match.topic_text}". Suggest 3 strong opening arguments. Return ONLY JSON:
+{"options":[{"label":"Strong Claim","response":"2-3 sentence opening argument","why":"brief reason"},{"label":"Evidence-Led","response":"2-3 sentence opening argument","why":"brief reason"},{"label":"Framing Angle","response":"2-3 sentence opening argument","why":"brief reason"}]}`;
     try {
       const d = JSON.parse(extractJSON(await callAI(sys, "Give 3 options.")));
       setAceOptions(d.options);
@@ -306,17 +319,29 @@ export default function OnlineMatchPage() {
     supabase.channel(`arena:${id}`).send({ type: "broadcast", event: "item_used", payload: { by: user?.id, byName: me?.username ? `@${me.username}` : me?.name, item: key } });
   }
 
-  // Confidence Pill / Revival Shot still only notify for now — they'd need
-  // an actual persisted HP-adjustment mechanism (HP here is derived purely
-  // from scored damage, nothing tracks a manual heal), which is real
-  // follow-up work rather than something to fake here.
+  // Confidence Pill / Revival Shot — real healing now, persisted on the
+  // match row (player_a_heal/player_b_heal) so it's visible to both sides
+  // and survives a refresh. Computed the same way debot mode does it: heal
+  // is applied to whatever your CURRENT (already-clamped) HP is, not
+  // banked for later — using a pill at full health just wastes it, same as
+  // there.
+  async function applyHealItem(key: "confidence_pill" | "revival_shot") {
+    const remaining = itemsRemaining[key] || 0;
+    if (remaining <= 0) return;
+    const item = storeItems.find((si) => si.key === key);
+    const newHP = key === "revival_shot" ? MAX_HP : Math.min(MAX_HP, myHP + (item?.healAmount ?? 10));
+    const newHeal = newHP + myDamageTaken - MAX_HP;
+    const healColumn = iAmA ? "player_a_heal" : "player_b_heal";
+    const { error } = await supabase.from("online_matches").update({ [healColumn]: newHeal }).eq("id", match.id);
+    if (error) { console.error(error); return; }
+    setItemsRemaining((prev) => ({ ...prev, [key]: remaining - 1 }));
+    broadcastItemUse(key);
+  }
+
   function handleUseItem(key: string) {
     if (key === "insight_lens") { getInsight(); return; }
     if (key === "ace_card") { getAceOptions(); return; }
-    const remaining = itemsRemaining[key] || 0;
-    if (remaining <= 0) return;
-    setItemsRemaining((prev) => ({ ...prev, [key]: remaining - 1 }));
-    broadcastItemUse(key);
+    if (key === "confidence_pill" || key === "revival_shot") { applyHealItem(key); return; }
   }
 
   async function confirmLeave() {
@@ -397,6 +422,13 @@ export default function OnlineMatchPage() {
           </div>
         </div>
       </div>
+
+      {precedingOpponentArg && (
+        <div className="card" style={{ padding: "12px 14px", borderLeft: "3px solid var(--red)" }}>
+          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{oppHandle} said</div>
+          <div style={{ fontSize: 13, lineHeight: 1.5 }}>{precedingOpponentArg}</div>
+        </div>
+      )}
 
       {itemToast && <div style={{ fontSize: 12, color: "var(--amber)", textAlign: "center" }}>{itemToast}</div>}
 
@@ -492,9 +524,9 @@ export default function OnlineMatchPage() {
                     <button
                       key={key}
                       className="btn btn-ghost btn-sm"
-                      disabled={!precedingOpponentArg || !(itemsRemaining.ace_card > 0) || aceLoading}
+                      disabled={!(itemsRemaining.ace_card > 0) || aceLoading}
                       onClick={getAceOptions}
-                      title={!precedingOpponentArg ? "Nothing to respond to yet — you're opening this match" : "Get 3 suggested responses"}
+                      title={precedingOpponentArg ? "Get 3 suggested responses" : "Get 3 suggested opening arguments"}
                     >
                       {aceLoading ? "Generating…" : `Ace Card (${itemsRemaining.ace_card || 0})`}
                     </button>
@@ -506,7 +538,7 @@ export default function OnlineMatchPage() {
                     className="btn btn-ghost btn-sm"
                     disabled={!(itemsRemaining[key] > 0)}
                     onClick={() => handleUseItem(key)}
-                    title="Notifies your opponent — doesn't change scoring yet"
+                    title={key === "revival_shot" ? "Heal to full HP" : "Heal HP"}
                   >
                     {ITEM_LABELS[key] || key} ({itemsRemaining[key] || 0})
                   </button>

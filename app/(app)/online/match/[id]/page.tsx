@@ -73,6 +73,8 @@ export default function OnlineMatchPage() {
   const [showAce, setShowAce] = useState(false);
   const [aceOptions, setAceOptions] = useState<{ label: string; response: string; why: string }[] | null>(null);
   const [aceLoading, setAceLoading] = useState(false);
+  const [aceError, setAceError] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
   const seenTurns = useRef<Set<string>>(new Set());
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingSentRef = useRef(0);
@@ -237,6 +239,7 @@ export default function OnlineMatchPage() {
     setInput("");
     setShowInsight(false);
     setShowAce(false);
+    setAceError("");
 
     // Whatever the OTHER side most recently said is already computed above
     // as precedingOpponentArg.
@@ -298,6 +301,7 @@ export default function OnlineMatchPage() {
   async function getAceOptions() {
     if (!myTurn || !(itemsRemaining.ace_card > 0) || aceLoading) return;
     setAceLoading(true);
+    setAceError("");
     const sys = precedingOpponentArg
       ? `You are an expert debate coach. The player (${mySide}) responds to: "${precedingOpponentArg}". Topic: "${match.topic_text}". Return ONLY JSON:
 {"options":[{"label":"Direct Counter","response":"2-3 sentence response","why":"brief reason"},{"label":"Analytical Attack","response":"2-3 sentence response","why":"brief reason"},{"label":"Reframe","response":"2-3 sentence response","why":"brief reason"}]}`
@@ -305,12 +309,17 @@ export default function OnlineMatchPage() {
 {"options":[{"label":"Strong Claim","response":"2-3 sentence opening argument","why":"brief reason"},{"label":"Evidence-Led","response":"2-3 sentence opening argument","why":"brief reason"},{"label":"Framing Angle","response":"2-3 sentence opening argument","why":"brief reason"}]}`;
     try {
       const d = JSON.parse(extractJSON(await callAI(sys, "Give 3 options.")));
+      // Only reaching here (parse succeeded) spends the card — a Groq
+      // error or malformed response throws before any of this runs, so
+      // the catch block below is the only path on failure, and it never
+      // touches itemsRemaining.
       setAceOptions(d.options);
       setShowAce(true);
       setItemsRemaining((prev) => ({ ...prev, ace_card: (prev.ace_card || 0) - 1 }));
       broadcastItemUse("ace_card");
     } catch (e) {
       console.error(e);
+      setAceError("Failed to generate responses — your Ace Card wasn't spent. Try again.");
     }
     setAceLoading(false);
   }
@@ -433,17 +442,48 @@ export default function OnlineMatchPage() {
       {itemToast && <div style={{ fontSize: 12, color: "var(--amber)", textAlign: "center" }}>{itemToast}</div>}
 
       {matchDone ? (
-        <div className="card anim-fade-up" style={{ padding: 18, textAlign: "center" }}>
-          <div className="heading" style={{ fontSize: 24, marginBottom: 4 }}>
-            {match.status === "abandoned"
-              ? "Match Forfeited"
-              : match.result === "draw" ? "Draw" : (match.result === "a_win") === iAmA ? "You Won" : "You Lost"}
-          </div>
-          {match.mode === "random" && typeof match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] === "number" && (
-            <div style={{ fontSize: 13, color: "var(--muted)" }}>
-              Prestige {match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] >= 0 ? "+" : ""}{match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"]}
+        <div className="root" style={{ padding: 0 }}>
+          <div style={{ textAlign: "center", marginBottom: 20 }}>
+            <div className="anim-pop heading" style={{
+              fontSize: 44,
+              color: match.status === "abandoned" ? "var(--muted)" : match.result === "draw" ? "var(--muted)" : (match.result === "a_win") === iAmA ? "var(--blue)" : "var(--red)",
+              marginBottom: 6,
+            }}>
+              {match.status === "abandoned" ? "Forfeited" : match.result === "draw" ? "Draw" : (match.result === "a_win") === iAmA ? "Victory" : "Defeat"}
             </div>
-          )}
+            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 4 }}>vs {oppHandle} · "{match.topic_text}"</div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>{myScore} <span style={{ color: "var(--muted)", fontWeight: 400 }}>–</span> {oppScore}</div>
+            {match.mode === "random" && typeof match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] === "number" && (
+              <div style={{ fontSize: 14, color: "var(--amber)", fontWeight: 700, marginTop: 6 }}>
+                Prestige {match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] >= 0 ? "+" : ""}{match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"]}
+              </div>
+            )}
+          </div>
+
+          <div style={{ fontSize: 12, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>Round by Round</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {turns.length === 0 ? (
+              <div style={{ fontSize: 13, color: "var(--muted)" }}>No round detail recorded for this match.</div>
+            ) : turns.map((t, i) => {
+              const net = Math.max(0, t.gain - t.penalty);
+              const impact = turnImpact(net);
+              const style = iStyle(impact);
+              const isMine = (t.side === "a") === iAmA;
+              return (
+                <div key={i} className="card" style={{ padding: 14, borderColor: style.bc, background: style.bg }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>Round {t.roundNumber} · {isMine ? "You" : oppHandle}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: style.color }}>{impact} Strike</div>
+                    </div>
+                    <div style={{ fontSize: 16, fontWeight: 600, color: isMine ? "var(--blue)" : "var(--red)" }}>+{net} Pts</div>
+                  </div>
+                  <div style={{ fontSize: 13 }}>{t.argument}</div>
+                  {t.tags.length > 0 && <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap" }}>{t.tags.map((tag, ti) => <span key={ti} className="badge" style={{ background: "var(--surface2)", fontSize: 11 }}>{tag}</span>)}</div>}
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : (
         <>
@@ -547,6 +587,8 @@ export default function OnlineMatchPage() {
             </div>
           )}
 
+          {aceError && <div style={{ fontSize: 12, color: "var(--red)", textAlign: "center" }}>{aceError}</div>}
+
           {myTurn ? (
             <InputPanel input={input} setInput={handleInputChange} onSend={submit} isEvaluating={submitting} curSide={mySide} round={Math.min(nextRoundNumber, match.rounds_total)} rounds={match.rounds_total} />
           ) : (
@@ -557,19 +599,26 @@ export default function OnlineMatchPage() {
         </>
       )}
 
-      {/* Full exchange history, newest first, excluding the just-revealed last turn above */}
-      {turns.length > 1 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {turns.slice(0, -1).reverse().map((t, i) => {
-            const net = Math.max(0, t.gain - t.penalty);
-            const isMine = (t.side === "a") === iAmA;
-            return (
-              <div key={i} className="card" style={{ padding: 12, fontSize: 12, borderLeft: `3px solid ${iStyle(turnImpact(net)).color}` }}>
-                <div style={{ color: "var(--muted)", marginBottom: 4 }}>Round {t.roundNumber} · {isMine ? "You" : oppHandle} · +{net} Pts</div>
-                <div>{t.argument}</div>
-              </div>
-            );
-          })}
+      {/* Round history, collapsed by default — always-expanded got in the way while actively playing */}
+      {!matchDone && turns.length > 1 && (
+        <div>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowHistory((v) => !v)} style={{ marginBottom: showHistory ? 8 : 0 }}>
+            {showHistory ? "Hide" : "Show"} round history ({turns.length - 1})
+          </button>
+          {showHistory && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {turns.slice(0, -1).reverse().map((t, i) => {
+                const net = Math.max(0, t.gain - t.penalty);
+                const isMine = (t.side === "a") === iAmA;
+                return (
+                  <div key={i} className="card" style={{ padding: 12, fontSize: 12, borderLeft: `3px solid ${iStyle(turnImpact(net)).color}` }}>
+                    <div style={{ color: "var(--muted)", marginBottom: 4 }}>Round {t.roundNumber} · {isMine ? "You" : oppHandle} · +{net} Pts</div>
+                    <div>{t.argument}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

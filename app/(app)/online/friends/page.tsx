@@ -339,7 +339,7 @@ function ChallengeSetup({ target, error, onCancel, onSend }: {
   onCancel: () => void;
   onSend: (roundsTotal: number, allowedItems: Record<string, number>, topicText: string, hostSide: "FOR" | "AGAINST", firstArguerIsHost: boolean) => void;
 }) {
-  const { topics } = useGame();
+  const { topics, storeItems } = useGame();
   const [rounds, setRounds] = useState(5);
   const [items, setItems] = useState<Record<string, number>>({});
   const [topic, setTopic] = useState("");
@@ -453,11 +453,19 @@ function ChallengeSetup({ target, error, onCancel, onSend }: {
           <button className={`btn btn-sm ${!firstArguerIsHost ? "btn-primary" : "btn-ghost"}`} style={{ flex: 1 }} onClick={() => setFirstArguerIsHost(false)}>@{target.username}</button>
         </div>
 
-        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Number of rounds</label>
-        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          {[5, 10, 15].map((n) => (
-            <button key={n} className={`btn btn-sm ${rounds === n ? "btn-primary" : "btn-ghost"}`} style={{ flex: 1 }} onClick={() => setRounds(n)}>{n} Rounds</button>
-          ))}
+        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Number of rounds <span style={{ color: "var(--muted)" }}>(max 20)</span></label>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setRounds((r) => Math.max(1, r - 1))} disabled={rounds <= 1}>−</button>
+          <input
+            className="input-field"
+            type="number"
+            min={1}
+            max={20}
+            value={rounds}
+            onChange={(e) => setRounds(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+            style={{ width: 64, textAlign: "center" }}
+          />
+          <button className="btn btn-ghost btn-sm" onClick={() => setRounds((r) => Math.min(20, r + 1))} disabled={rounds >= 20}>+</button>
         </div>
 
         <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>
@@ -466,12 +474,16 @@ function ChallengeSetup({ target, error, onCancel, onSend }: {
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
           {STACKABLE_ITEMS.map((opt) => {
             const count = items[opt.key] || 0;
+            const maxStock = storeItems.find((si) => si.key === opt.key)?.maxStock ?? null;
+            const atCap = maxStock !== null && count >= maxStock;
             return (
               <div key={opt.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ flex: 1, fontSize: 13 }}>{opt.label}</span>
+                <span style={{ flex: 1, fontSize: 13 }}>
+                  {opt.label} {maxStock !== null && <span style={{ color: "var(--muted)" }}>({maxStock} max)</span>}
+                </span>
                 <button className="btn btn-ghost btn-sm" onClick={() => setItemCount(opt.key, Math.max(0, count - 1))} disabled={count === 0}>−</button>
                 <span style={{ fontSize: 13, width: 20, textAlign: "center" }}>{count}</span>
-                <button className="btn btn-ghost btn-sm" onClick={() => setItemCount(opt.key, count + 1)}>+</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setItemCount(opt.key, count + 1)} disabled={atCap}>+</button>
               </div>
             );
           })}

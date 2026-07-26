@@ -486,7 +486,7 @@ export default function OnlineMatchPage() {
 
   async function confirmLeave() {
     setLeaving(true);
-    const { error } = await supabase.from("online_matches").update({ status: "abandoned", completed_at: new Date().toISOString() }).eq("id", match.id);
+    const { error } = await supabase.rpc("forfeit_match", { p_match_id: match.id, p_forfeiter: user?.id });
     if (error) console.error(error);
     setLeaving(false);
     setLeaveConfirm(false);
@@ -498,16 +498,19 @@ export default function OnlineMatchPage() {
   const lastTurnImpact = lastTurn ? turnImpact(lastTurnNet) : "Ineffective";
 
   if (matchDone) {
+    const wasForfeited = match.status === "abandoned";
+    const hasResult = match.result === "a_win" || match.result === "b_win" || match.result === "draw";
     return (
       <div className="root" style={{ minHeight: "100vh", padding: "24px 16px", maxWidth: 720, margin: "0 auto" }}>
         <div style={{ textAlign: "center", marginBottom: 20 }}>
           <div className="anim-pop heading" style={{
             fontSize: 44,
-            color: match.status === "abandoned" ? "var(--muted)" : match.result === "draw" ? "var(--muted)" : (match.result === "a_win") === iAmA ? "var(--blue)" : "var(--red)",
+            color: !hasResult ? "var(--muted)" : match.result === "draw" ? "var(--muted)" : (match.result === "a_win") === iAmA ? "var(--blue)" : "var(--red)",
             marginBottom: 6,
           }}>
-            {match.status === "abandoned" ? "Forfeited" : match.result === "draw" ? "Draw" : (match.result === "a_win") === iAmA ? "Victory" : "Defeat"}
+            {!hasResult ? "Forfeited" : match.result === "draw" ? "Draw" : (match.result === "a_win") === iAmA ? "Victory" : "Defeat"}
           </div>
+          {wasForfeited && hasResult && <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 6 }}>(forfeited)</div>}
           <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 4 }}>vs {oppHandle} · "{match.topic_text}"</div>
           <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>{myScore} <span style={{ color: "var(--muted)", fontWeight: 400 }}>–</span> {oppScore}</div>
           {match.mode === "random" && typeof match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] === "number" && (

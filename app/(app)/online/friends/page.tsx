@@ -341,6 +341,7 @@ function ChallengeSetup({ target, error, onCancel, onSend }: {
 }) {
   const { topics, storeItems } = useGame();
   const [rounds, setRounds] = useState(5);
+  const [maxRounds, setMaxRounds] = useState(20);
   const [items, setItems] = useState<Record<string, number>>({});
   const [topic, setTopic] = useState("");
   const [hostSide, setHostSide] = useState<"FOR" | "AGAINST">("FOR");
@@ -354,6 +355,14 @@ function ChallengeSetup({ target, error, onCancel, onSend }: {
   const [aiError, setAiError] = useState("");
   const [showBrowse, setShowBrowse] = useState(false);
   const [browseFilter, setBrowseFilter] = useState("");
+
+  useEffect(() => {
+    supabase.from("app_settings").select("value").eq("key", "friend_match_max_rounds").maybeSingle().then(({ data }) => {
+      const max = typeof data?.value?.max === "number" ? data.value.max : 20;
+      setMaxRounds(max);
+      setRounds((r) => Math.min(r, max));
+    });
+  }, []);
 
   async function searchTopicsWithAI() {
     const query = aiQuery.trim();
@@ -453,19 +462,19 @@ function ChallengeSetup({ target, error, onCancel, onSend }: {
           <button className={`btn btn-sm ${!firstArguerIsHost ? "btn-primary" : "btn-ghost"}`} style={{ flex: 1 }} onClick={() => setFirstArguerIsHost(false)}>@{target.username}</button>
         </div>
 
-        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Number of rounds <span style={{ color: "var(--muted)" }}>(max 20)</span></label>
+        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Number of rounds <span style={{ color: "var(--muted)" }}>(max {maxRounds})</span></label>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
           <button className="btn btn-ghost btn-sm" onClick={() => setRounds((r) => Math.max(1, r - 1))} disabled={rounds <= 1}>−</button>
           <input
             className="input-field"
             type="number"
             min={1}
-            max={20}
+            max={maxRounds}
             value={rounds}
-            onChange={(e) => setRounds(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+            onChange={(e) => setRounds(Math.max(1, Math.min(maxRounds, Number(e.target.value) || 1)))}
             style={{ width: 64, textAlign: "center" }}
           />
-          <button className="btn btn-ghost btn-sm" onClick={() => setRounds((r) => Math.min(20, r + 1))} disabled={rounds >= 20}>+</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => setRounds((r) => Math.min(maxRounds, r + 1))} disabled={rounds >= maxRounds}>+</button>
         </div>
 
         <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>
@@ -534,9 +543,9 @@ function Row({ person, online, pendingLabel, children }: { person: ProfileLite |
         }} />
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <a href={person ? `/players/${person.id}` : undefined} style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block", color: "var(--text)", textDecoration: "none" }}>
           @{person?.username || "unknown"}
-        </div>
+        </a>
         <div style={{ fontSize: 11, color: "var(--muted)" }}>
           {pendingLabel || (online ? "Online" : "Offline")}
         </div>

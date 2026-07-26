@@ -19,7 +19,7 @@
 // was the only way to see anything move.
 
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { scorePvpTurn, turnImpact, finalizeMatchIfComplete } from "@/lib/onlineArena";
@@ -50,6 +50,7 @@ type Turn = { side: "a" | "b"; roundNumber: number; argument: string; gain: numb
 
 export default function OnlineMatchPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { user, storeItems } = useGame();
 
   const [match, setMatch] = useState<any>(null);
@@ -129,12 +130,72 @@ export default function OnlineMatchPage() {
     return () => clearInterval(interval);
   }, [id]);
 
+  // Admin-configurable timers (Admin -> Online) — prematch auto-continue
+  // and, random mode only, the per-turn auto-submit clock. Fetched once;
+  // these are UI-only pacing knobs, nothing server-trusted depends on them.
+  const [timerSettings, setTimerSettings] = useState({ prematchSeconds: 5, turnSeconds: 20 });
+  useEffect(() => {
+    supabase.from("app_settings").select("key, value").in("key", ["online_prematch_seconds", "online_turn_seconds"]).then(({ data }) => {
+      const map: Record<string, any> = {};
+      for (const row of data || []) map[row.key] = row.value;
+      setTimerSettings({
+        prematchSeconds: typeof map.online_prematch_seconds?.seconds === "number" ? map.online_prematch_seconds.seconds : 5,
+        turnSeconds: typeof map.online_turn_seconds?.seconds === "number" ? map.online_turn_seconds.seconds : 20,
+      });
+    });
+  }, []);
+
   const iAmA = match?.player_a === user?.id;
+  const iAmFirstArguer = !!match && match.first_arguer === user?.id;
   const firstArguerIsA = !!match && match.first_arguer === match.player_a;
   const firstArgKey = firstArguerIsA ? "player_a_argument" : "player_b_argument";
   const secondArgKey = firstArguerIsA ? "player_b_argument" : "player_a_argument";
   const activeRound = rounds.find((r) => r.player_a_gain === null || r.player_b_gain === null);
   const matchDone = match?.status === "completed" || match?.status === "abandoned";
+  const matchPending = match?.status === "pending";
+
+  // A minimal, early-safe "is it my turn" — the full version with waiting
+  // labels etc. is computed further down for the JSX; this one only exists
+  // so the turn timer (which must be an unconditional hook, declared before
+  // any early return) has something to key off of.
+  let myTurnEarly = false;
+  if (match && match.status === "active") {
+    if (!activeRound) myTurnEarly = iAmFirstArguer;
+    else if (!activeRound[firstArgKey]) myTurnEarly = iAmFirstArguer;
+    else if (!activeRound[secondArgKey]) myTurnEarly = !iAmFirstArguer;
+  }
+
+  // Refs so the timer's setTimeout always calls the LATEST submit/input,
+  // never a stale closure captured whenever the timer effect last reset —
+  // these two update on every render (no dependency array), independent of
+  // when the timer itself last (re)started.
+  const submitRef = useRef<(overrideText?: string) => void>(() => {});
+  const inputRef = useRef("");
+  useEffect(() => { submitRef.current = submit; });
+  useEffect(() => { inputRef.current = input; });
+
+  // Per-turn auto-submit clock — random mode only, per the spec this was
+  // built against (friend mode has no timer). Resets whenever a fresh turn
+  // starts for me; counts down to 0 and force-submits whatever's typed (or
+  // a filler if nothing was), rather than leaving the opponent waiting
+  // forever on someone who's gone idle.
+  const [turnTimeLeft, setTurnTimeLeft] = useState<number | null>(null);
+  useEffect(() => {
+    if (!match || match.mode !== "random" || !myTurnEarly) { setTurnTimeLeft(null); return; }
+    setTurnTimeLeft(timerSettings.turnSeconds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myTurnEarly, activeRound?.id, match?.mode, timerSettings.turnSeconds]);
+
+  useEffect(() => {
+    if (turnTimeLeft === null) return;
+    if (turnTimeLeft <= 0) {
+      const filler = inputRef.current.trim() ? undefined : "(no response — time expired)";
+      submitRef.current(filler);
+      return;
+    }
+    const t = setTimeout(() => setTurnTimeLeft((s) => (s ?? 1) - 1), 1000);
+    return () => clearTimeout(t);
+  }, [turnTimeLeft]);
 
   // Flat chronological turn list, oldest first.
   const turns: Turn[] = [];
@@ -167,13 +228,31 @@ export default function OnlineMatchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turns.length, match?.id]);
 
+  // Prematch countdown for random-mode matches (created with
+  // status='pending' precisely so this has something to show before
+  // either side can type anything). Friend matches never hit this — they're
+  // created directly as 'active'. Whichever client's countdown reaches
+  // zero first flips the status; the .eq("status","pending") guard makes a
+  // second client's attempt (if it also reaches zero) a harmless no-op.
+  const [countdown, setCountdown] = useState<number | null>(null);
+  useEffect(() => {
+    if (match?.status !== "pending") { setCountdown(null); return; }
+    if (countdown === null) { setCountdown(timerSettings.prematchSeconds); return; }
+    if (countdown <= 0) {
+      supabase.from("online_matches").update({ status: "active" }).eq("id", match.id).eq("status", "pending")
+        .then(({ error }) => { if (error) console.error(error); });
+      return;
+    }
+    const t = setTimeout(() => setCountdown((c) => (c ?? 1) - 1), 1000);
+    return () => clearTimeout(t);
+  }, [match?.status, countdown, match?.id, timerSettings.prematchSeconds]);
+
   if (loading) return <div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>;
   if (!match) return <div style={{ padding: 24, color: "var(--muted)" }}>Match not found.</div>;
 
   const myKey = iAmA ? "player_a_argument" : "player_b_argument";
   const myGainKey = iAmA ? "player_a_gain" : "player_b_gain";
   const myPenaltyKey = iAmA ? "player_a_penalty" : "player_b_penalty";
-  const iAmFirstArguer = match.first_arguer === user?.id;
   const nextRoundNumber = rounds.length + 1;
   const oppId = iAmA ? match.player_b : match.player_a;
   const me = profiles[user?.id || ""];
@@ -181,6 +260,58 @@ export default function OnlineMatchPage() {
   const mySide: "FOR" | "AGAINST" = iAmA ? match.player_a_side : (match.player_a_side === "FOR" ? "AGAINST" : "FOR");
   const oppSide = mySide === "FOR" ? "AGAINST" : "FOR";
   const oppHandle = opp?.username ? `@${opp.username}` : opp?.name || "your opponent";
+
+  if (matchPending) {
+    const iGoFirst = match.first_arguer === user?.id;
+
+    async function continueNow() {
+      await supabase.from("online_matches").update({ status: "active" }).eq("id", match.id).eq("status", "pending");
+    }
+    // Both Rematch and Leave abandon this pending match — since it never
+    // had any scored rounds, apply_match_completion never runs for it and
+    // prestige is untouched either way. Rematch additionally re-queues you
+    // immediately; Leave just drops you back to a plain "Find Match" screen.
+    async function rematch() {
+      await supabase.from("online_matches").update({ status: "abandoned" }).eq("id", match.id);
+      router.push("/online/random?auto=1");
+    }
+    async function leaveNow() {
+      await supabase.from("online_matches").update({ status: "abandoned" }).eq("id", match.id);
+      router.push("/online/random");
+    }
+
+    return (
+      <div className="root" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
+        <div style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 16 }}>
+          {match.mode === "random" ? "Random Match Found" : "Friend Match"}
+        </div>
+        <div className="anim-pop heading" style={{ fontSize: 26, marginBottom: 20 }}>vs {oppHandle}</div>
+        <div className="card" style={{ padding: 18, maxWidth: 380, width: "100%", marginBottom: 20 }}>
+          <div style={{ fontSize: 14, marginBottom: 14 }}>"{match.topic_text}"</div>
+          <div style={{ display: "flex", justifyContent: "space-around", marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>You</div>
+              <span className="badge" style={{ background: "var(--blue-soft)", color: "var(--blue)", fontSize: 11 }}>{iAmA ? match.player_a_side : (match.player_a_side === "FOR" ? "AGAINST" : "FOR")}</span>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>{oppHandle}</div>
+              <span className="badge" style={{ background: "var(--red-soft)", color: "var(--red)", fontSize: 11 }}>{!iAmA ? match.player_a_side : (match.player_a_side === "FOR" ? "AGAINST" : "FOR")}</span>
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>{match.rounds_total} rounds · {iGoFirst ? "You go first" : `${oppHandle} goes first`}</div>
+        </div>
+        <div className="anim-pop heading" style={{ fontSize: 40, color: "var(--blue)", marginBottom: 20 }}>{countdown !== null && countdown > 0 ? countdown : "Fight!"}</div>
+
+        {match.mode === "random" && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-primary btn-sm" onClick={continueNow}>Continue Now</button>
+            <button className="btn btn-ghost btn-sm" onClick={rematch}>Rematch</button>
+            <button className="btn btn-ghost btn-sm" onClick={leaveNow}>Leave</button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // Whose turn is it, right now.
   let myTurn = false;
@@ -232,8 +363,8 @@ export default function OnlineMatchPage() {
     supabase.channel(`arena:${id}`).send({ type: "broadcast", event: "typing", payload: { by: user?.id } });
   }
 
-  async function submit() {
-    const text = input.trim();
+  async function submit(overrideText?: string) {
+    const text = (overrideText ?? input).trim();
     if (!text || !myTurn || submitting) return;
     setSubmitting(true);
     setInput("");
@@ -366,6 +497,55 @@ export default function OnlineMatchPage() {
   const lastTurnNet = lastTurn ? Math.max(0, lastTurn.gain - lastTurn.penalty) : 0;
   const lastTurnImpact = lastTurn ? turnImpact(lastTurnNet) : "Ineffective";
 
+  if (matchDone) {
+    return (
+      <div className="root" style={{ minHeight: "100vh", padding: "24px 16px", maxWidth: 720, margin: "0 auto" }}>
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <div className="anim-pop heading" style={{
+            fontSize: 44,
+            color: match.status === "abandoned" ? "var(--muted)" : match.result === "draw" ? "var(--muted)" : (match.result === "a_win") === iAmA ? "var(--blue)" : "var(--red)",
+            marginBottom: 6,
+          }}>
+            {match.status === "abandoned" ? "Forfeited" : match.result === "draw" ? "Draw" : (match.result === "a_win") === iAmA ? "Victory" : "Defeat"}
+          </div>
+          <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 4 }}>vs {oppHandle} · "{match.topic_text}"</div>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>{myScore} <span style={{ color: "var(--muted)", fontWeight: 400 }}>–</span> {oppScore}</div>
+          {match.mode === "random" && typeof match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] === "number" && (
+            <div style={{ fontSize: 14, color: "var(--amber)", fontWeight: 700, marginBottom: 10 }}>
+              Prestige {match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] >= 0 ? "+" : ""}{match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"]}
+            </div>
+          )}
+          {oppId && <a href={`/players/${oppId}`} className="btn btn-ghost btn-sm">View {oppHandle}'s Profile</a>}
+        </div>
+
+        <div style={{ fontSize: 12, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>Round by Round</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {turns.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--muted)" }}>No round detail recorded for this match.</div>
+          ) : turns.map((t, i) => {
+            const net = Math.max(0, t.gain - t.penalty);
+            const impact = turnImpact(net);
+            const style = iStyle(impact);
+            const isMine = (t.side === "a") === iAmA;
+            return (
+              <div key={i} className="card" style={{ padding: 14, borderColor: style.bc, background: style.bg }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>Round {t.roundNumber} · {isMine ? "You" : oppHandle}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: style.color }}>{impact} Strike</div>
+                  </div>
+                  <div style={{ fontSize: 16, fontWeight: 600, color: isMine ? "var(--blue)" : "var(--red)" }}>+{net} Pts</div>
+                </div>
+                <div style={{ fontSize: 13 }}>{t.argument}</div>
+                {t.tags.length > 0 && <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap" }}>{t.tags.map((tag, ti) => <span key={ti} className="badge" style={{ background: "var(--surface2)", fontSize: 11 }}>{tag}</span>)}</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="root" style={{ minHeight: "100vh", display: "flex", flexDirection: "column", maxWidth: 840, margin: "0 auto", padding: 14, gap: 10 }}>
       {dmgFloat && (
@@ -441,52 +621,7 @@ export default function OnlineMatchPage() {
 
       {itemToast && <div style={{ fontSize: 12, color: "var(--amber)", textAlign: "center" }}>{itemToast}</div>}
 
-      {matchDone ? (
-        <div className="root" style={{ padding: 0 }}>
-          <div style={{ textAlign: "center", marginBottom: 20 }}>
-            <div className="anim-pop heading" style={{
-              fontSize: 44,
-              color: match.status === "abandoned" ? "var(--muted)" : match.result === "draw" ? "var(--muted)" : (match.result === "a_win") === iAmA ? "var(--blue)" : "var(--red)",
-              marginBottom: 6,
-            }}>
-              {match.status === "abandoned" ? "Forfeited" : match.result === "draw" ? "Draw" : (match.result === "a_win") === iAmA ? "Victory" : "Defeat"}
-            </div>
-            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 4 }}>vs {oppHandle} · "{match.topic_text}"</div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>{myScore} <span style={{ color: "var(--muted)", fontWeight: 400 }}>–</span> {oppScore}</div>
-            {match.mode === "random" && typeof match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] === "number" && (
-              <div style={{ fontSize: 14, color: "var(--amber)", fontWeight: 700, marginTop: 6 }}>
-                Prestige {match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"] >= 0 ? "+" : ""}{match[iAmA ? "player_a_prestige_delta" : "player_b_prestige_delta"]}
-              </div>
-            )}
-          </div>
-
-          <div style={{ fontSize: 12, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>Round by Round</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {turns.length === 0 ? (
-              <div style={{ fontSize: 13, color: "var(--muted)" }}>No round detail recorded for this match.</div>
-            ) : turns.map((t, i) => {
-              const net = Math.max(0, t.gain - t.penalty);
-              const impact = turnImpact(net);
-              const style = iStyle(impact);
-              const isMine = (t.side === "a") === iAmA;
-              return (
-                <div key={i} className="card" style={{ padding: 14, borderColor: style.bc, background: style.bg }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-                    <div>
-                      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 2 }}>Round {t.roundNumber} · {isMine ? "You" : oppHandle}</div>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: style.color }}>{impact} Strike</div>
-                    </div>
-                    <div style={{ fontSize: 16, fontWeight: 600, color: isMine ? "var(--blue)" : "var(--red)" }}>+{net} Pts</div>
-                  </div>
-                  <div style={{ fontSize: 13 }}>{t.argument}</div>
-                  {t.tags.length > 0 && <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap" }}>{t.tags.map((tag, ti) => <span key={ti} className="badge" style={{ background: "var(--surface2)", fontSize: 11 }}>{tag}</span>)}</div>}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : (
-        <>
+      <>
           {/* Latest turn reveal — impact-colored like the debot arena's "Strike" card */}
           {lastTurn && (
             <div className="card anim-fade-up" style={{ padding: 16, borderColor: iStyle(lastTurnImpact).bc, background: iStyle(lastTurnImpact).bg }}>
@@ -589,18 +724,22 @@ export default function OnlineMatchPage() {
 
           {aceError && <div style={{ fontSize: 12, color: "var(--red)", textAlign: "center" }}>{aceError}</div>}
 
+          {myTurn && match.mode === "random" && turnTimeLeft !== null && (
+            <div style={{ fontSize: 11, color: turnTimeLeft <= 5 ? "var(--red)" : "var(--muted)", textAlign: "right" }}>
+              {turnTimeLeft}s to respond
+            </div>
+          )}
           {myTurn ? (
-            <InputPanel input={input} setInput={handleInputChange} onSend={submit} isEvaluating={submitting} curSide={mySide} round={Math.min(nextRoundNumber, match.rounds_total)} rounds={match.rounds_total} />
+            <InputPanel input={input} setInput={handleInputChange} onSend={() => submit()} isEvaluating={submitting} curSide={mySide} round={Math.min(nextRoundNumber, match.rounds_total)} rounds={match.rounds_total} />
           ) : (
             <div className="card" style={{ padding: 14, textAlign: "center" }}>
               <span className="anim-pulse" style={{ fontSize: 13, color: "var(--muted)" }}>{waitingLabel}</span>
             </div>
           )}
         </>
-      )}
 
       {/* Round history, collapsed by default — always-expanded got in the way while actively playing */}
-      {!matchDone && turns.length > 1 && (
+      {turns.length > 1 && (
         <div>
           <button className="btn btn-ghost btn-sm" onClick={() => setShowHistory((v) => !v)} style={{ marginBottom: showHistory ? 8 : 0 }}>
             {showHistory ? "Hide" : "Show"} round history ({turns.length - 1})

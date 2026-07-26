@@ -129,7 +129,7 @@ function useDragReorder(onCommit: (from: number, to: number) => void) {
 }
 
 export function AdminPanel({ profile }: AdminPanelProps) {
-  const [tab, setTab] = useState<"debots" | "topics" | "store" | "achievements" | "learning" | "settings" | "ai">("debots");
+  const [tab, setTab] = useState<"debots" | "topics" | "store" | "achievements" | "learning" | "settings" | "ai" | "online">("debots");
 
   // Fail closed: no profile, or not an admin -> render nothing at all.
   if (!profile?.is_admin) return null;
@@ -148,6 +148,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
           ["learning", "Learning"],
           ["settings", "Settings"],
           ["ai", "AI"],
+          ["online", "Online"],
         ] as const).map(([t, label]) => (
           <button
             key={t}
@@ -166,6 +167,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
       {tab === "learning" && <LearningAdmin />}
       {tab === "settings" && <SettingsAdmin />}
       {tab === "ai" && <AiSettingsAdmin />}
+      {tab === "online" && <OnlineSettingsAdmin />}
     </div>
   );
 }
@@ -2394,5 +2396,122 @@ function LabeledTextarea({
       />
       {err && <div style={{ color: "var(--red)", fontSize: 10, marginTop: 2 }}>{err}</div>}
     </label>
+  );
+}
+
+// ===========================================================================
+// ONLINE — random-match config (rounds, allowed items + limits, prematch
+// countdown, per-turn timer) and Friend Match's host-configurable rounds
+// cap. All read client-side (try_match_player also reads the match-facing
+// ones server-side for the actual matchmaking; the two timer settings are
+// UI-only, read straight from app_settings by the arena page).
+// ===========================================================================
+
+const ONLINE_ITEM_KEYS: { key: string; label: string }[] = [
+  { key: "insight_lens", label: "Insight Lens" },
+  { key: "ace_card", label: "Ace Card" },
+  { key: "confidence_pill", label: "Confidence Pill" },
+  { key: "revival_shot", label: "Revival Shot" },
+];
+
+function OnlineSettingsAdmin() {
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("");
+  const [randomRounds, setRandomRounds] = useState<number | "">(10);
+  const [friendMaxRounds, setFriendMaxRounds] = useState<number | "">(20);
+  const [prematchSeconds, setPrematchSeconds] = useState<number | "">(5);
+  const [turnSeconds, setTurnSeconds] = useState<number | "">(20);
+  const [itemLimits, setItemLimits] = useState<Record<string, number>>({});
+
+  async function load() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("app_settings")
+      .select("key, value")
+      .in("key", ["online_random_rounds", "friend_match_max_rounds", "online_prematch_seconds", "online_turn_seconds", "online_random_items"]);
+    if (error) {
+      setStatus(`Failed to load: ${error.message}`);
+      setLoading(false);
+      return;
+    }
+    const map: Record<string, any> = {};
+    for (const row of data || []) map[row.key] = row.value;
+    setRandomRounds(typeof map.online_random_rounds?.rounds === "number" ? map.online_random_rounds.rounds : 10);
+    setFriendMaxRounds(typeof map.friend_match_max_rounds?.max === "number" ? map.friend_match_max_rounds.max : 20);
+    setPrematchSeconds(typeof map.online_prematch_seconds?.seconds === "number" ? map.online_prematch_seconds.seconds : 5);
+    setTurnSeconds(typeof map.online_turn_seconds?.seconds === "number" ? map.online_turn_seconds.seconds : 20);
+    setItemLimits(map.online_random_items && typeof map.online_random_items === "object" ? map.online_random_items : {});
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function save() {
+    setStatus("Saving…");
+    const rows = [
+      { key: "online_random_rounds", value: { rounds: Math.max(1, Math.min(20, Number(randomRounds) || 10)) } },
+      { key: "friend_match_max_rounds", value: { max: Math.max(1, Math.min(20, Number(friendMaxRounds) || 20)) } },
+      { key: "online_prematch_seconds", value: { seconds: Math.max(1, Math.min(30, Number(prematchSeconds) || 5)) } },
+      { key: "online_turn_seconds", value: { seconds: Math.max(5, Math.min(120, Number(turnSeconds) || 20)) } },
+      { key: "online_random_items", value: itemLimits },
+    ];
+    const { data, error } = await supabase.from("app_settings").upsert(rows, { onConflict: "key" }).select();
+    if (error) { setStatus(`Failed: ${error.message}`); return; }
+    if (!data || data.length < rows.length) {
+      setStatus("Some settings didn't save — check the 'app_settings' table's write policy allows this admin account.");
+      return;
+    }
+    setStatus("Settings saved.");
+  }
+
+  if (loading) return <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 480 }}>
+      <div>
+        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Random match rounds (fixed, players don't choose)</label>
+        <input className="input-field" type="number" min={1} max={20} value={randomRounds} onChange={(e) => setRandomRounds(e.target.value === "" ? "" : Number(e.target.value))} />
+      </div>
+
+      <div>
+        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Friend Match max rounds (host can choose up to this)</label>
+        <input className="input-field" type="number" min={1} max={20} value={friendMaxRounds} onChange={(e) => setFriendMaxRounds(e.target.value === "" ? "" : Number(e.target.value))} />
+      </div>
+
+      <div>
+        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Prematch countdown (seconds, before a random match auto-starts)</label>
+        <input className="input-field" type="number" min={1} max={30} value={prematchSeconds} onChange={(e) => setPrematchSeconds(e.target.value === "" ? "" : Number(e.target.value))} />
+      </div>
+
+      <div>
+        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Per-turn timer (seconds, random mode only — auto-submits when it hits 0)</label>
+        <input className="input-field" type="number" min={5} max={120} value={turnSeconds} onChange={(e) => setTurnSeconds(e.target.value === "" ? "" : Number(e.target.value))} />
+      </div>
+
+      <div>
+        <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 8 }}>
+          Random match items <span style={{ color: "var(--muted)" }}>(limit per match — 0 disables it entirely)</span>
+        </label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {ONLINE_ITEM_KEYS.map((opt) => (
+            <div key={opt.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ flex: 1, fontSize: 13 }}>{opt.label}</span>
+              <input
+                className="input-field"
+                type="number"
+                min={0}
+                max={5}
+                style={{ width: 70 }}
+                value={itemLimits[opt.key] || 0}
+                onChange={(e) => setItemLimits((prev) => ({ ...prev, [opt.key]: Math.max(0, Math.min(5, Number(e.target.value) || 0)) }))}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
+      {status && <div style={{ fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+    </div>
   );
 }

@@ -13,6 +13,9 @@ import { DebotStage } from "@/components/arena/DebotStage";
 import { DialogueBox } from "@/components/game/DialogueBox";
 import { InputPanel } from "@/components/game/InputPanel";
 import { ItemsBar } from "@/components/game/ItemsBar";
+import { SpeakButton } from "@/components/game/SpeakButton";
+import { MicButton } from "@/components/game/MicButton";
+import { speak } from "@/lib/tts";
 import { GAME_CONFIG } from "@/config/Game";
 import { fillTemplate } from "@/config/Judge";
 import { AppIcon } from "@/components/ui/AppIcon";
@@ -96,6 +99,16 @@ export default function OfflinePage() {
   // Battle State
   const [round, setRound] = useState(1);
   const [oppArg, setOppArg] = useState("");
+
+  // Auto-speak — off by default (Settings -> Audio). The manual speak
+  // button next to the debot's name works regardless of this setting.
+  const lastSpokenRef = useRef("");
+  useEffect(() => {
+    if (!profile?.auto_speak_enabled || !opp?.voice_id || !oppArg) return;
+    if (lastSpokenRef.current === oppArg) return;
+    lastSpokenRef.current = oppArg;
+    speak(oppArg, opp.voice_id).catch((e) => console.error(e));
+  }, [oppArg, profile?.auto_speak_enabled, opp?.voice_id]);
   const [nextOppArg, setNextOppArg] = useState("");
   const [input, setInput] = useState("");
   const [pHP, setPHP] = useState(100);
@@ -817,7 +830,10 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
                 </div>
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{opp?.name}</span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      {opp?.name}
+                      {opp?.voice_id && oppArg && <SpeakButton text={oppArg} voiceId={opp.voice_id} size={12} />}
+                    </span>
                     <span>{Math.round(clamp(oHP, 0, opp?.maxHP || 100))}/{opp?.maxHP || 100}</span>
                   </div>
                   <HPBar current={oHP} max={opp?.maxHP || 100} color={opp?.color || "var(--red)"} />
@@ -918,16 +934,21 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
 
         {/* Input */}
         {phase === "player-turn" && (
-          <InputPanel
-            input={input}
-            setInput={setInput}
-            onSend={submitArg}
-            isEvaluating={false}
-            curSide={curSide}
-            round={round}
-            rounds={rounds}
-            textRef={textRef}
-          />
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <div style={{ flex: 1 }}>
+              <InputPanel
+                input={input}
+                setInput={setInput}
+                onSend={submitArg}
+                isEvaluating={false}
+                curSide={curSide}
+                round={round}
+                rounds={rounds}
+                textRef={textRef}
+              />
+            </div>
+            <MicButton onTranscript={(t) => setInput((prev) => (prev ? `${prev} ${t}` : t))} />
+          </div>
         )}
 
         {/* Round history, collapsed by default — this was requested to

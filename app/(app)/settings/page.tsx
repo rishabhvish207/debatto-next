@@ -6,7 +6,7 @@ import { ConfirmModal } from "@/components/shell/ConfirmModal";
 import { clearAllLocalData } from "@/lib/persistenceManager";
 
 export default function SettingsPage() {
-  const { user, profile, signInWithGoogle, signOut } = useGame();
+  const { user, profile, signInWithGoogle, signOut, upProfile } = useGame();
   const [confirmingReset, setConfirmingReset] = useState(false);
 
   function resetGuestProgress() {
@@ -35,6 +35,33 @@ export default function SettingsPage() {
         ) : (
           <button className="btn btn-primary btn-sm" onClick={signInWithGoogle}>Log in with Google</button>
         )}
+      </div>
+
+      {/* Audio */}
+      <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: "var(--amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 10 }}>
+          Audio
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ maxWidth: 400 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>Auto-speak opponent responses</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              Automatically reads each new debot or opponent argument aloud. You can always tap the speaker icon to hear one manually, regardless of this setting.
+            </div>
+          </div>
+          <button
+            onClick={() => upProfile({ auto_speak_enabled: !profile?.auto_speak_enabled })}
+            style={{
+              width: 44, height: 26, borderRadius: 13, border: "none", cursor: "pointer", flexShrink: 0, marginLeft: 16,
+              background: profile?.auto_speak_enabled ? "var(--blue)" : "var(--faint)", position: "relative", transition: "background .15s",
+            }}
+          >
+            <span style={{
+              position: "absolute", top: 3, left: profile?.auto_speak_enabled ? 22 : 3, width: 20, height: 20, borderRadius: "50%",
+              background: "#fff", transition: "left .15s",
+            }} />
+          </button>
+        </div>
       </div>
 
       {/* Data */}

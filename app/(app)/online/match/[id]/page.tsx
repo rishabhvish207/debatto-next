@@ -30,6 +30,9 @@ import { AdvBar } from "@/components/ui/AdvBar";
 import { InputPanel } from "@/components/game/InputPanel";
 import { AppIcon } from "@/components/ui/AppIcon";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
+import { SpeakButton } from "@/components/game/SpeakButton";
+import { MicButton } from "@/components/game/MicButton";
+import { speak } from "@/lib/tts";
 
 const supabase = createClient();
 
@@ -51,11 +54,11 @@ type Turn = { side: "a" | "b"; roundNumber: number; argument: string; gain: numb
 export default function OnlineMatchPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { user, storeItems } = useGame();
+  const { user, storeItems, profile } = useGame();
 
   const [match, setMatch] = useState<any>(null);
   const [rounds, setRounds] = useState<any[]>([]);
-  const [profiles, setProfiles] = useState<Record<string, { name: string; username: string | null; avatar_url: string | null }>>({});
+  const [profiles, setProfiles] = useState<Record<string, { name: string; username: string | null; avatar_url: string | null; voice_id: string | null }>>({});
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -89,7 +92,7 @@ export default function OnlineMatchPage() {
     const { data: r } = await supabase.from("online_match_rounds").select("*").eq("match_id", id).order("round_number", { ascending: true });
     setRounds(r || []);
 
-    const { data: profs, error: profsError } = await supabase.from("public_profiles").select("id, name, username, avatar_url").in("id", [m.player_a, m.player_b]);
+    const { data: profs, error: profsError } = await supabase.from("public_profiles").select("id, name, username, avatar_url, voice_id").in("id", [m.player_a, m.player_b]);
     if (profsError) console.error(profsError);
     setProfiles(Object.fromEntries((profs || []).map((p: any) => [p.id, p])));
     setLoading(false);
@@ -227,6 +230,26 @@ export default function OnlineMatchPage() {
     setTimeout(() => setDmgFloat(null), 1100);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turns.length, match?.id]);
+
+  // Auto-speak — off by default (Settings -> Audio), and only if the
+  // opponent has actually chosen a voice for themselves. The manual speak
+  // button next to their name works regardless of this setting.
+  const lastSpokenTurnRef = useRef("");
+  useEffect(() => {
+    if (!match || !profile?.auto_speak_enabled) return;
+    const last = turns[turns.length - 1];
+    if (!last) return;
+    const isOpponentTurn = (last.side === "a") !== iAmA;
+    if (!isOpponentTurn) return;
+    const key = `${last.roundNumber}-${last.side}`;
+    if (lastSpokenTurnRef.current === key) return;
+    const oppIdEarly = iAmA ? match.player_b : match.player_a;
+    const voiceId = profiles[oppIdEarly]?.voice_id;
+    if (!voiceId) return;
+    lastSpokenTurnRef.current = key;
+    speak(last.argument, voiceId).catch((e) => console.error(e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns.length, match?.id, profile?.auto_speak_enabled, profiles]);
 
   // Prematch countdown for random-mode matches (created with
   // status='pending' precisely so this has something to show before
@@ -607,7 +630,10 @@ export default function OnlineMatchPage() {
           </div>
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{oppHandle}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                {oppHandle}
+                {opp?.voice_id && precedingOpponentArg && <SpeakButton text={precedingOpponentArg} voiceId={opp.voice_id} size={12} />}
+              </span>
               <span>{Math.round(oppHP)}/{MAX_HP}</span>
             </div>
             <HPBar current={oppHP} max={MAX_HP} color="var(--red)" />
@@ -733,7 +759,12 @@ export default function OnlineMatchPage() {
             </div>
           )}
           {myTurn ? (
-            <InputPanel input={input} setInput={handleInputChange} onSend={() => submit()} isEvaluating={submitting} curSide={mySide} round={Math.min(nextRoundNumber, match.rounds_total)} rounds={match.rounds_total} />
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+              <div style={{ flex: 1 }}>
+                <InputPanel input={input} setInput={handleInputChange} onSend={() => submit()} isEvaluating={submitting} curSide={mySide} round={Math.min(nextRoundNumber, match.rounds_total)} rounds={match.rounds_total} />
+              </div>
+              <MicButton onTranscript={(t) => handleInputChange(input ? `${input} ${t}` : t)} />
+            </div>
           ) : (
             <div className="card" style={{ padding: 14, textAlign: "center" }}>
               <span className="anim-pulse" style={{ fontSize: 13, color: "var(--muted)" }}>{waitingLabel}</span>

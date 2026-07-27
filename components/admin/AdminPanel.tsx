@@ -13,6 +13,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useGame } from "@/contexts/GameContext";
+import { useEnabledVoices } from "@/lib/voices";
 import { callAI } from "@/lib/ai";
 import { DEFAULT_THEMES, FONT_PRESETS } from "@/config/Themes";
 import { CONDITION_TYPE_META, AchievementConditionType, displayName } from "@/config/Achievements";
@@ -129,7 +130,7 @@ function useDragReorder(onCommit: (from: number, to: number) => void) {
 }
 
 export function AdminPanel({ profile }: AdminPanelProps) {
-  const [tab, setTab] = useState<"debots" | "topics" | "store" | "achievements" | "learning" | "settings" | "ai" | "online">("debots");
+  const [tab, setTab] = useState<"debots" | "topics" | "store" | "achievements" | "learning" | "settings" | "ai" | "online" | "voices">("debots");
 
   // Fail closed: no profile, or not an admin -> render nothing at all.
   if (!profile?.is_admin) return null;
@@ -149,6 +150,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
           ["settings", "Settings"],
           ["ai", "AI"],
           ["online", "Online"],
+          ["voices", "Voices"],
         ] as const).map(([t, label]) => (
           <button
             key={t}
@@ -168,6 +170,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
       {tab === "settings" && <SettingsAdmin />}
       {tab === "ai" && <AiSettingsAdmin />}
       {tab === "online" && <OnlineSettingsAdmin />}
+      {tab === "voices" && <VoicesAdmin />}
     </div>
   );
 }
@@ -197,6 +200,7 @@ const BLANK_DEBOT = {
 
 function DebotsAdmin() {
   const { refetchDebots } = useGame();
+  const { voices: enabledVoices } = useEnabledVoices();
   const [debots, setDebots] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<any>(null); // null = not editing, object = form data
@@ -212,7 +216,7 @@ function DebotsAdmin() {
     return {
       name: e.name, sub: e.sub, personality: e.personality, depth: e.depth, story: e.story,
       arg_sentences: e.arg_sentences, multiplier: e.multiplier, cost: e.cost, max_hp: e.max_hp,
-      color: e.color, diff: e.diff, dc: e.dc, reward: e.reward,
+      color: e.color, diff: e.diff, dc: e.dc, reward: e.reward, voice_id: e.voice_id,
     };
   }
 
@@ -300,6 +304,7 @@ function DebotsAdmin() {
       diff: editing.diff,
       dc: editing.dc,
       reward: Number(editing.reward) || 0,
+      voice_id: editing.voice_id || null,
     };
 
     const res = editing.id
@@ -449,6 +454,13 @@ function DebotsAdmin() {
           <LabeledInput label="Reward (❋)" value={editing.reward} onChange={(v) => updateField("reward", v)} type="number" />
           <LabeledInput label="Max HP" value={editing.max_hp} onChange={(v) => updateField("max_hp", v)} type="number" />
           <LabeledInput label="Damage multiplier" value={editing.multiplier} onChange={(v) => updateField("multiplier", v)} type="number" step="0.1" />
+          <div>
+            <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Voice</label>
+            <select className="input-field" value={editing.voice_id || ""} onChange={(e) => updateField("voice_id", e.target.value || null)}>
+              <option value="">None (no TTS for this debot)</option>
+              {enabledVoices.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+            </select>
+          </div>
         </div>
         <LabeledTextarea label="Personality" value={editing.personality} onChange={(v) => updateField("personality", v)} />
         <LabeledTextarea label="Argument depth" value={editing.depth} onChange={(v) => updateField("depth", v)} />
@@ -2512,6 +2524,93 @@ function OnlineSettingsAdmin() {
 
       <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
       {status && <div style={{ fontSize: 12, color: "var(--muted)" }}>{status}</div>}
+    </div>
+  );
+}
+
+// ===========================================================================
+// VOICES — browses the LIVE Edge TTS voice catalog (not a hardcoded guess
+// at valid voice names) and lets the admin curate which ones are actually
+// enabled. That enabled subset is what powers both the per-debot voice
+// picker (DebotsAdmin) and players' own voice picker (Profile page) — one
+// central control point rather than two separately-managed lists.
+// ===========================================================================
+
+type VoiceOption = { id: string; label: string; gender: string; locale: string };
+
+function VoicesAdmin() {
+  const [allVoices, setAllVoices] = useState<VoiceOption[]>([]);
+  const [enabledIds, setEnabledIds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("");
+  const [filter, setFilter] = useState("");
+
+  async function load() {
+    setLoading(true);
+    setStatus("");
+    try {
+      const [voicesRes, settingsRes] = await Promise.all([
+        fetch("/api/tts/voices").then((r) => r.json()),
+        supabase.from("app_settings").select("value").eq("key", "enabled_voices").maybeSingle(),
+      ]);
+      if (voicesRes.error) throw new Error(voicesRes.error);
+      setAllVoices(voicesRes.voices || []);
+      const saved: { id: string }[] = settingsRes.data?.value?.voices || [];
+      setEnabledIds(new Set(saved.map((v) => v.id)));
+    } catch (e: any) {
+      setStatus(`Failed to load voice catalog: ${e.message}`);
+    }
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, []);
+
+  function toggle(id: string) {
+    setEnabledIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function save() {
+    setStatus("Saving…");
+    // Full {id, label} pairs, not just ids — so Profile/DebotsAdmin can
+    // read this one row directly instead of each separately re-fetching
+    // and re-filtering the live catalog just to get display labels back.
+    const enabledVoices = allVoices.filter((v) => enabledIds.has(v.id)).map((v) => ({ id: v.id, label: v.label }));
+    const { error } = await supabase.from("app_settings").upsert(
+      { key: "enabled_voices", value: { voices: enabledVoices } },
+      { onConflict: "key" }
+    );
+    setStatus(error ? `Failed: ${error.message}` : "Saved.");
+  }
+
+  const filtered = allVoices.filter((v) => !filter.trim() || v.label.toLowerCase().includes(filter.trim().toLowerCase()));
+
+  if (loading) return <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading voice catalog…</div>;
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, lineHeight: 1.6 }}>
+        Pulled live from the TTS service, not a hardcoded list. Check the voices you want available anywhere in the
+        app — unchecked voices won't show up for debot assignment or player selection.
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+        <input className="input-field" placeholder="Filter…" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ flex: 1 }} />
+        <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
+      </div>
+      {status && <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>{status}</div>}
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>{enabledIds.size} enabled / {allVoices.length} total</div>
+      <div style={{ maxHeight: 420, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+        {filtered.map((v) => (
+          <label key={v.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: 6, background: enabledIds.has(v.id) ? "var(--faint)" : "transparent", cursor: "pointer" }}>
+            <input type="checkbox" checked={enabledIds.has(v.id)} onChange={() => toggle(v.id)} />
+            <span style={{ fontSize: 13 }}>{v.label}</span>
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>{v.gender}</span>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }

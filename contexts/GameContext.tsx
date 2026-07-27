@@ -50,6 +50,8 @@ type Profile = {
   equipped_theme_id?: string | null; // null/absent = the default theme
   username?: string | null;          // unique handle for friend search — null until the player sets one
   show_history_public?: boolean;     // toggled in Settings; gates whether other players can see your online history
+  voice_id?: string | null;          // player's own TTS voice, heard by opponents in online mode
+  auto_speak_enabled?: boolean;      // toggled in Settings; auto-plays each new opponent argument aloud
   // Cumulative totals, never decrease — `coins` itself can't be used for
   // "earn/spend this much lifetime" achievements since it's a spendable
   // balance that goes back down on every purchase. The admin debucks cheat
@@ -269,6 +271,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
         equipped_theme_id: data.equipped_theme_id ?? null,
         username: data.username ?? null,
         show_history_public: data.show_history_public ?? true,
+        voice_id: data.voice_id ?? null,
+        auto_speak_enabled: data.auto_speak_enabled ?? false,
         lifetimeDebucksEarned: data.lifetime_debucks_earned ?? 0,
         lifetimeDebucksSpent: data.lifetime_debucks_spent ?? 0,
       });

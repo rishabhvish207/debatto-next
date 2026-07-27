@@ -6,12 +6,14 @@ import { createClient } from "@/utils/supabase/client";
 import { DebucksIcon } from "@/components/ui/DebucksIcon";
 import { displayName, tierColor } from "@/config/Achievements";
 import { AppIcon } from "@/components/ui/AppIcon";
+import { useEnabledVoices } from "@/lib/voices";
 
 const supabase = createClient();
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
 export default function ProfilePage() {
   const { user, profile, upProfile, uploadAvatar, removeAvatar, signOut, signInWithGoogle, achievements, unlockedAchievementIds } = useGame();
+  const { voices: enabledVoices } = useEnabledVoices();
 
   // Profile only ever shows the HIGHEST unlocked tier of each achievement
   // group, not every tier stacked — e.g. clearing Clean Sweep III means the
@@ -291,6 +293,23 @@ export default function ProfilePage() {
             style={{ marginBottom: 6, resize: "vertical", fontFamily: "inherit" }}
           />
           <div style={{ fontSize: 10, color: "var(--muted)", textAlign: "right", marginBottom: 14 }}>{bio.length}/280</div>
+
+          {user && enabledVoices.length > 0 && (
+            <>
+              <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>
+                Your voice <span style={{ color: "var(--muted)" }}>(heard by opponents in online matches)</span>
+              </label>
+              <select
+                className="input-field"
+                value={profile?.voice_id || ""}
+                onChange={(e) => upProfile({ voice_id: e.target.value || null })}
+                style={{ marginBottom: 14 }}
+              >
+                <option value="">None</option>
+                {enabledVoices.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+            </>
+          )}
 
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn btn-primary btn-sm" disabled={saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>

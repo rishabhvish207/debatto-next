@@ -13,8 +13,6 @@ import { DebotStage } from "@/components/arena/DebotStage";
 import { DialogueBox } from "@/components/game/DialogueBox";
 import { InputPanel } from "@/components/game/InputPanel";
 import { ItemsBar } from "@/components/game/ItemsBar";
-import { SpeakButton } from "@/components/game/SpeakButton";
-import { MicButton } from "@/components/game/MicButton";
 import { speak } from "@/lib/tts";
 import { GAME_CONFIG } from "@/config/Game";
 import { fillTemplate } from "@/config/Judge";
@@ -830,10 +828,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
                 </div>
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      {opp?.name}
-                      {opp?.voice_id && oppArg && <SpeakButton text={oppArg} voiceId={opp.voice_id} size={12} />}
-                    </span>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{opp?.name}</span>
                     <span>{Math.round(clamp(oHP, 0, opp?.maxHP || 100))}/{opp?.maxHP || 100}</span>
                   </div>
                   <HPBar current={oHP} max={opp?.maxHP || 100} color={opp?.color || "var(--red)"} />
@@ -845,7 +840,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
         })()}
 
         {/* Dialogue Box */}
-        <DialogueBox history={history} oppArg={oppArg} phase={phase} oppName={opp?.name} showHint={showHint} hintData={hintData} />
+        <DialogueBox history={history} oppArg={oppArg} phase={phase} oppName={opp?.name} showHint={showHint} hintData={hintData} voiceId={opp?.voice_id} />
 
         {/* Loading */}
         {(phase === "loading" || phase === "evaluating") && (
@@ -934,21 +929,16 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
 
         {/* Input */}
         {phase === "player-turn" && (
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <div style={{ flex: 1 }}>
-              <InputPanel
-                input={input}
-                setInput={setInput}
-                onSend={submitArg}
-                isEvaluating={false}
-                curSide={curSide}
-                round={round}
-                rounds={rounds}
-                textRef={textRef}
-              />
-            </div>
-            <MicButton onTranscript={(t) => setInput((prev) => (prev ? `${prev} ${t}` : t))} />
-          </div>
+          <InputPanel
+            input={input}
+            setInput={setInput}
+            onSend={submitArg}
+            isEvaluating={false}
+            curSide={curSide}
+            round={round}
+            rounds={rounds}
+            textRef={textRef}
+          />
         )}
 
         {/* Round history, collapsed by default — this was requested to

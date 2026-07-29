@@ -14,6 +14,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
 import { useGame } from "@/contexts/GameContext";
 import { useEnabledVoices } from "@/lib/voices";
+import { speak } from "@/lib/tts";
 import { callAI } from "@/lib/ai";
 import { DEFAULT_THEMES, FONT_PRESETS } from "@/config/Themes";
 import { CONDITION_TYPE_META, AchievementConditionType, displayName } from "@/config/Achievements";
@@ -200,7 +201,19 @@ const BLANK_DEBOT = {
 
 function DebotsAdmin() {
   const { refetchDebots } = useGame();
-  const { voices: enabledVoices } = useEnabledVoices();
+  const { voices: enabledVoices } = useEnabledVoices("debots");
+  const [previewingVoice, setPreviewingVoice] = useState(false);
+
+  async function previewVoice(voiceId: string, sampleName: string) {
+    if (previewingVoice || !voiceId) return;
+    setPreviewingVoice(true);
+    try {
+      await speak(`Hi, I'm ${sampleName}. This is a preview of my voice.`, voiceId);
+    } catch (e) {
+      console.error(e);
+    }
+    setPreviewingVoice(false);
+  }
   const [debots, setDebots] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<any>(null); // null = not editing, object = form data
@@ -456,10 +469,21 @@ function DebotsAdmin() {
           <LabeledInput label="Damage multiplier" value={editing.multiplier} onChange={(v) => updateField("multiplier", v)} type="number" step="0.1" />
           <div>
             <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 6 }}>Voice</label>
-            <select className="input-field" value={editing.voice_id || ""} onChange={(e) => updateField("voice_id", e.target.value || null)}>
-              <option value="">None (no TTS for this debot)</option>
-              {enabledVoices.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
-            </select>
+            <div style={{ display: "flex", gap: 8 }}>
+              <select className="input-field" value={editing.voice_id || ""} onChange={(e) => updateField("voice_id", e.target.value || null)} style={{ flex: 1 }}>
+                <option value="">None (no TTS for this debot)</option>
+                {enabledVoices.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              </select>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={!editing.voice_id || previewingVoice}
+                onClick={() => previewVoice(editing.voice_id, editing.name || "this debot")}
+                title="Hear a sample of this voice"
+              >
+                {previewingVoice ? "…" : <AppIcon token="🔊" size={14} />}
+              </button>
+            </div>
           </div>
         </div>
         <LabeledTextarea label="Personality" value={editing.personality} onChange={(v) => updateField("personality", v)} />
@@ -2530,87 +2554,140 @@ function OnlineSettingsAdmin() {
 
 // ===========================================================================
 // VOICES — browses the LIVE Edge TTS voice catalog (not a hardcoded guess
-// at valid voice names) and lets the admin curate which ones are actually
-// enabled. That enabled subset is what powers both the per-debot voice
-// picker (DebotsAdmin) and players' own voice picker (Profile page) — one
-// central control point rather than two separately-managed lists.
+// at valid voice names) and lets the admin curate TWO SEPARATE enabled
+// lists: one for debot assignment, one for players' own voice picker.
+// These are deliberately independent pools, not one shared list.
 // ===========================================================================
 
 type VoiceOption = { id: string; label: string; gender: string; locale: string };
 
+function VoiceChecklist({
+  title, description, allVoices, enabledIds, onToggle, onSave, status,
+}: {
+  title: string; description: string; allVoices: VoiceOption[]; enabledIds: Set<string>;
+  onToggle: (id: string) => void; onSave: () => void; status: string;
+}) {
+  const [filter, setFilter] = useState("");
+  const [previewingId, setPreviewingId] = useState<string | null>(null);
+
+  async function preview(id: string) {
+    if (previewingId) return;
+    setPreviewingId(id);
+    try {
+      await speak("This is a preview of this voice.", id);
+    } catch (e) {
+      console.error(e);
+    }
+    setPreviewingId(null);
+  }
+
+  const filtered = allVoices.filter((v) => !filter.trim() || v.label.toLowerCase().includes(filter.trim().toLowerCase()));
+
+  return (
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>{title}</div>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, lineHeight: 1.6 }}>{description}</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+        <input className="input-field" placeholder="Filter…" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ flex: 1 }} />
+        <button className="btn btn-primary btn-sm" onClick={onSave}>Save</button>
+      </div>
+      {status && <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>{status}</div>}
+      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>{enabledIds.size} enabled / {allVoices.length} total</div>
+      <div style={{ maxHeight: 340, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+        {filtered.map((v) => (
+          <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: 6, background: enabledIds.has(v.id) ? "var(--faint)" : "transparent" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, cursor: "pointer" }}>
+              <input type="checkbox" checked={enabledIds.has(v.id)} onChange={() => onToggle(v.id)} />
+              <span style={{ fontSize: 13 }}>{v.label}</span>
+              <span style={{ fontSize: 11, color: "var(--muted)" }}>{v.gender}</span>
+            </label>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={previewingId === v.id}
+              onClick={() => preview(v.id)}
+              style={{ padding: "3px 8px" }}
+              title="Hear a sample of this voice"
+            >
+              {previewingId === v.id ? "…" : <AppIcon token="🔊" size={13} />}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function VoicesAdmin() {
   const [allVoices, setAllVoices] = useState<VoiceOption[]>([]);
-  const [enabledIds, setEnabledIds] = useState<Set<string>>(new Set());
+  const [debotIds, setDebotIds] = useState<Set<string>>(new Set());
+  const [playerIds, setPlayerIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState("");
-  const [filter, setFilter] = useState("");
+  const [debotStatus, setDebotStatus] = useState("");
+  const [playerStatus, setPlayerStatus] = useState("");
 
   async function load() {
     setLoading(true);
-    setStatus("");
     try {
-      const [voicesRes, settingsRes] = await Promise.all([
+      const [voicesRes, debotSettings, playerSettings] = await Promise.all([
         fetch("/api/tts/voices").then((r) => r.json()),
-        supabase.from("app_settings").select("value").eq("key", "enabled_voices").maybeSingle(),
+        supabase.from("app_settings").select("value").eq("key", "enabled_voices_debots").maybeSingle(),
+        supabase.from("app_settings").select("value").eq("key", "enabled_voices_players").maybeSingle(),
       ]);
       if (voicesRes.error) throw new Error(voicesRes.error);
       setAllVoices(voicesRes.voices || []);
-      const saved: { id: string }[] = settingsRes.data?.value?.voices || [];
-      setEnabledIds(new Set(saved.map((v) => v.id)));
+      setDebotIds(new Set((debotSettings.data?.value?.voices || []).map((v: any) => v.id)));
+      setPlayerIds(new Set((playerSettings.data?.value?.voices || []).map((v: any) => v.id)));
     } catch (e: any) {
-      setStatus(`Failed to load voice catalog: ${e.message}`);
+      setDebotStatus(`Failed to load voice catalog: ${e.message}`);
     }
     setLoading(false);
   }
 
   useEffect(() => { load(); }, []);
 
-  function toggle(id: string) {
-    setEnabledIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  function toggleDebot(id: string) {
+    setDebotIds((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }
+  function togglePlayer(id: string) {
+    setPlayerIds((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   }
 
-  async function save() {
-    setStatus("Saving…");
-    // Full {id, label} pairs, not just ids — so Profile/DebotsAdmin can
-    // read this one row directly instead of each separately re-fetching
-    // and re-filtering the live catalog just to get display labels back.
-    const enabledVoices = allVoices.filter((v) => enabledIds.has(v.id)).map((v) => ({ id: v.id, label: v.label }));
-    const { error } = await supabase.from("app_settings").upsert(
-      { key: "enabled_voices", value: { voices: enabledVoices } },
-      { onConflict: "key" }
-    );
-    setStatus(error ? `Failed: ${error.message}` : "Saved.");
+  async function saveDebotList() {
+    setDebotStatus("Saving…");
+    const voices = allVoices.filter((v) => debotIds.has(v.id)).map((v) => ({ id: v.id, label: v.label }));
+    const { error } = await supabase.from("app_settings").upsert({ key: "enabled_voices_debots", value: { voices } }, { onConflict: "key" });
+    setDebotStatus(error ? `Failed: ${error.message}` : "Saved.");
   }
-
-  const filtered = allVoices.filter((v) => !filter.trim() || v.label.toLowerCase().includes(filter.trim().toLowerCase()));
+  async function savePlayerList() {
+    setPlayerStatus("Saving…");
+    const voices = allVoices.filter((v) => playerIds.has(v.id)).map((v) => ({ id: v.id, label: v.label }));
+    const { error } = await supabase.from("app_settings").upsert({ key: "enabled_voices_players", value: { voices } }, { onConflict: "key" });
+    setPlayerStatus(error ? `Failed: ${error.message}` : "Saved.");
+  }
 
   if (loading) return <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading voice catalog…</div>;
 
   return (
     <div>
-      <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, lineHeight: 1.6 }}>
-        Pulled live from the TTS service, not a hardcoded list. Check the voices you want available anywhere in the
-        app — unchecked voices won't show up for debot assignment or player selection.
-      </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
-        <input className="input-field" placeholder="Filter…" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ flex: 1 }} />
-        <button className="btn btn-primary btn-sm" onClick={save}>Save</button>
-      </div>
-      {status && <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>{status}</div>}
-      <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>{enabledIds.size} enabled / {allVoices.length} total</div>
-      <div style={{ maxHeight: 420, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
-        {filtered.map((v) => (
-          <label key={v.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 8px", borderRadius: 6, background: enabledIds.has(v.id) ? "var(--faint)" : "transparent", cursor: "pointer" }}>
-            <input type="checkbox" checked={enabledIds.has(v.id)} onChange={() => toggle(v.id)} />
-            <span style={{ fontSize: 13 }}>{v.label}</span>
-            <span style={{ fontSize: 11, color: "var(--muted)" }}>{v.gender}</span>
-          </label>
-        ))}
-      </div>
+      <VoiceChecklist
+        title="Voices for Debots"
+        description="Enabled here shows up in each debot's voice dropdown (Admin -> Debots)."
+        allVoices={allVoices}
+        enabledIds={debotIds}
+        onToggle={toggleDebot}
+        onSave={saveDebotList}
+        status={debotStatus}
+      />
+      <VoiceChecklist
+        title="Voices for Players"
+        description="Enabled here shows up in players' own voice picker (their Profile page) — a separate pool from the debot list above."
+        allVoices={allVoices}
+        enabledIds={playerIds}
+        onToggle={togglePlayer}
+        onSave={savePlayerList}
+        status={playerStatus}
+      />
     </div>
   );
 }

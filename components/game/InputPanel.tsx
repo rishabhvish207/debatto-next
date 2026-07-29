@@ -1,5 +1,6 @@
 import React from "react";
 import { CornerDownLeft, ArrowRight } from "lucide-react";
+import { MicButton } from "./MicButton";
 
 export function InputPanel({
   input, setInput, onSend, isEvaluating,
@@ -35,17 +36,20 @@ export function InputPanel({
         style={{ marginBottom: 10 }}
       />
 
-      {/* Submit */}
-      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8 }}>
-        <span style={{ fontSize: 11, color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: 3 }}>Ctrl + <CornerDownLeft size={12} /></span>
-        <button
-          className="btn btn-primary"
-          disabled={!canSubmit}
-          onClick={onSend}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-        >
-          Submit <ArrowRight size={14} />
-        </button>
+      {/* Mic (bottom-left) / Submit (bottom-right) — horizontally opposite */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <MicButton onTranscript={(t: string) => setInput(input ? `${input} ${t}` : t)} disabled={isEvaluating} />
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 11, color: "var(--muted)", display: "inline-flex", alignItems: "center", gap: 3 }}>Ctrl + <CornerDownLeft size={12} /></span>
+          <button
+            className="btn btn-primary"
+            disabled={!canSubmit}
+            onClick={onSend}
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            Submit <ArrowRight size={14} />
+          </button>
+        </div>
       </div>
     </div>
   );

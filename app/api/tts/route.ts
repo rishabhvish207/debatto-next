@@ -17,6 +17,14 @@ import { NextRequest, NextResponse } from "next/server";
 // ships), which Turbopack can't resolve. This sidesteps that packaging bug.
 import { tts } from "edge-tts/out/index.js";
 
+// edge-tts's uuid() helper calls the global `crypto.randomUUID()`. That's
+// only a guaranteed global since Node 19 — if the deployed runtime is
+// older (or just doesn't expose it as a bare global the way this library
+// assumes), every call fails before a WebSocket is even opened. Cheap and
+// harmless to ensure this explicitly rather than trust the ambient global.
+import { webcrypto } from "node:crypto";
+if (!(globalThis as any).crypto) (globalThis as any).crypto = webcrypto;
+
 export async function POST(req: NextRequest) {
   try {
     const { text, voice } = await req.json();
@@ -32,7 +40,10 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "audio/mpeg", "Cache-Control": "no-store" },
     });
   } catch (err: any) {
+    // Logged with the full error object (not just .message) — this is an
+    // unofficial API with no support channel, so a complete stack/cause is
+    // the only way to actually diagnose a failure rather than guess at one.
     console.error("TTS failed:", err);
-    return NextResponse.json({ error: err?.message || "TTS failed" }, { status: 500 });
+    return NextResponse.json({ error: err?.message || String(err) || "TTS failed" }, { status: 500 });
   }
 }

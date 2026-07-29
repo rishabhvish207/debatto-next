@@ -14,17 +14,21 @@ const supabase = createClient();
 
 export type EnabledVoice = { id: string; label: string };
 
-export function useEnabledVoices() {
+// Debots and players are curated as two SEPARATE admin-controlled lists
+// (Admin -> Voices), not one shared pool — a debot's assigned voice and
+// what a player can pick for themselves are deliberately independent.
+export function useEnabledVoices(scope: "debots" | "players") {
   const [voices, setVoices] = useState<EnabledVoice[]>([]);
   const [loading, setLoading] = useState(true);
+  const key = scope === "debots" ? "enabled_voices_debots" : "enabled_voices_players";
 
   useEffect(() => {
-    supabase.from("app_settings").select("value").eq("key", "enabled_voices").maybeSingle().then(({ data, error }) => {
+    supabase.from("app_settings").select("value").eq("key", key).maybeSingle().then(({ data, error }) => {
       if (error) console.error(error);
       setVoices(data?.value?.voices || []);
       setLoading(false);
     });
-  }, []);
+  }, [key]);
 
   return { voices, loading };
 }

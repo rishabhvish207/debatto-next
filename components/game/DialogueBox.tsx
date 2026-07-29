@@ -1,7 +1,8 @@
 import React from "react";
 import { WeakText } from "./WeakText";
+import { SpeakButton } from "./SpeakButton";
 
-export function DialogueBox({ history, oppArg, phase, oppName, showHint, hintData }: any) {
+export function DialogueBox({ history, oppArg, phase, oppName, showHint, hintData, voiceId }: any) {
   // Only show the last history entry (previous round's exchange) if it exists
   const lastEntry = history?.length > 0 ? history[history.length - 1] : null;
 
@@ -38,7 +39,10 @@ export function DialogueBox({ history, oppArg, phase, oppName, showHint, hintDat
             letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 7,
             display: "flex", justifyContent: "space-between",
           }}>
-            <span>{oppName} argues</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              {oppName} argues
+              {voiceId && oppArg && <SpeakButton text={oppArg} voiceId={voiceId} size={16} />}
+            </span>
             {phase === "opponent-scored" && (
               <span style={{ color: "var(--red)", fontWeight: 700 }}>Counter-Attack!</span>
             )}

@@ -31,7 +31,6 @@ import { InputPanel } from "@/components/game/InputPanel";
 import { AppIcon } from "@/components/ui/AppIcon";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 import { SpeakButton } from "@/components/game/SpeakButton";
-import { MicButton } from "@/components/game/MicButton";
 import { speak } from "@/lib/tts";
 
 const supabase = createClient();
@@ -630,10 +629,7 @@ export default function OnlineMatchPage() {
           </div>
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                {oppHandle}
-                {opp?.voice_id && precedingOpponentArg && <SpeakButton text={precedingOpponentArg} voiceId={opp.voice_id} size={12} />}
-              </span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>{oppHandle}</span>
               <span>{Math.round(oppHP)}/{MAX_HP}</span>
             </div>
             <HPBar current={oppHP} max={MAX_HP} color="var(--red)" />
@@ -643,7 +639,10 @@ export default function OnlineMatchPage() {
 
       {precedingOpponentArg && (
         <div className="card" style={{ padding: "12px 14px", borderLeft: "3px solid var(--red)" }}>
-          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>{oppHandle} said</div>
+          <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+            {oppHandle} said
+            {opp?.voice_id && <SpeakButton text={precedingOpponentArg} voiceId={opp.voice_id} size={16} />}
+          </div>
           <div style={{ fontSize: 13, lineHeight: 1.5 }}>{precedingOpponentArg}</div>
         </div>
       )}
@@ -759,12 +758,7 @@ export default function OnlineMatchPage() {
             </div>
           )}
           {myTurn ? (
-            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-              <div style={{ flex: 1 }}>
-                <InputPanel input={input} setInput={handleInputChange} onSend={() => submit()} isEvaluating={submitting} curSide={mySide} round={Math.min(nextRoundNumber, match.rounds_total)} rounds={match.rounds_total} />
-              </div>
-              <MicButton onTranscript={(t) => handleInputChange(input ? `${input} ${t}` : t)} />
-            </div>
+            <InputPanel input={input} setInput={handleInputChange} onSend={() => submit()} isEvaluating={submitting} curSide={mySide} round={Math.min(nextRoundNumber, match.rounds_total)} rounds={match.rounds_total} />
           ) : (
             <div className="card" style={{ padding: 14, textAlign: "center" }}>
               <span className="anim-pulse" style={{ fontSize: 13, color: "var(--muted)" }}>{waitingLabel}</span>

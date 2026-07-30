@@ -1,21 +1,20 @@
 // app/api/tts/voices/route.ts
 //
-// Live voice catalog from Edge TTS's own voice list, rather than a
-// hardcoded guess at valid voice names — filtered to English locales and
-// Neural voices (the natural-sounding tier; the service also has some
-// lower-quality standard voices not worth surfacing). Admin browses this
-// to build the "enabled" subset (app_settings.enabled_voices); that subset
-// is what actually populates the debot-assignment and player-voice pickers.
+// Live voice catalog — see app/api/tts/route.ts for why this uses
+// msedge-tts rather than the originally-chosen (now-broken) edge-tts
+// package. Filtered to English locales and Neural voices (the
+// natural-sounding tier; the service also has lower-quality standard
+// voices not worth surfacing). Admin browses this to build the two
+// separate enabled lists (debots / players).
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-// See app/api/tts/route.ts for why this imports the compiled subpath
-// directly instead of the bare package name.
-import { getVoices } from "edge-tts/out/index.js";
+import { MsEdgeTTS } from "msedge-tts";
 
 export async function GET() {
   try {
-    const voices = await getVoices();
+    const tts = new MsEdgeTTS();
+    const voices = await tts.getVoices();
     const filtered = voices
       .filter((v) => v.Locale.startsWith("en-") && v.ShortName.includes("Neural"))
       .map((v) => ({

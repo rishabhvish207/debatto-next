@@ -6,7 +6,7 @@ import {
   ShoppingBag, Swords, Settings, User, ScrollText, Wrench, Puzzle, CheckCircle2,
   XCircle, Medal, CalendarCheck, LayoutGrid, Sparkle, Search, Lock, Save, Pencil,
   Check, X, ArrowRight, ArrowLeft, ArrowUpRight, CornerDownLeft, AlertTriangle,
-  Sparkles, Handshake, Bell, Volume2, Mic, type LucideIcon,
+  Sparkles, Handshake, Bell, Volume2, Mic, Pause, type LucideIcon,
 } from "lucide-react";
 
 // Every achievement/store-item/debot `icon` field in the database is still
@@ -59,6 +59,7 @@ const EMOJI_TO_ICON: Record<string, LucideIcon> = {
   "🔔": Bell,
   "🔊": Volume2,
   "🎤": Mic,
+  "⏸": Pause,
 };
 
 /**

@@ -13,7 +13,7 @@ import { DebotStage } from "@/components/arena/DebotStage";
 import { DialogueBox } from "@/components/game/DialogueBox";
 import { InputPanel } from "@/components/game/InputPanel";
 import { ItemsBar } from "@/components/game/ItemsBar";
-import { speak } from "@/lib/tts";
+import { speak, stopAllSpeaking } from "@/lib/tts";
 import { GAME_CONFIG } from "@/config/Game";
 import { fillTemplate } from "@/config/Judge";
 import { AppIcon } from "@/components/ui/AppIcon";
@@ -107,6 +107,15 @@ export default function OfflinePage() {
     lastSpokenRef.current = oppArg;
     speak(oppArg, opp.voice_id).catch((e) => console.error(e));
   }, [oppArg, profile?.auto_speak_enabled, opp?.voice_id]);
+
+  // Stop any speech (auto-speak or a manually-tapped button) when leaving
+  // this page entirely — otherwise audio keeps playing in the background
+  // after navigating away, since HTMLAudioElement isn't tied to React's
+  // component lifecycle on its own.
+  useEffect(() => {
+    return () => stopAllSpeaking();
+  }, []);
+
   const [nextOppArg, setNextOppArg] = useState("");
   const [input, setInput] = useState("");
   const [pHP, setPHP] = useState(100);

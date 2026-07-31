@@ -31,7 +31,7 @@ import { InputPanel } from "@/components/game/InputPanel";
 import { AppIcon } from "@/components/ui/AppIcon";
 import { IMPACT_STYLE } from "@/constants/ImpactStyle";
 import { SpeakButton } from "@/components/game/SpeakButton";
-import { speak } from "@/lib/tts";
+import { speak, stopAllSpeaking } from "@/lib/tts";
 
 const supabase = createClient();
 
@@ -249,6 +249,14 @@ export default function OnlineMatchPage() {
     speak(last.argument, voiceId).catch((e) => console.error(e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turns.length, match?.id, profile?.auto_speak_enabled, profiles]);
+
+  // Stop any speech (auto-speak or a manually-tapped button) when leaving
+  // this page entirely — otherwise audio keeps playing in the background
+  // after navigating away, since HTMLAudioElement isn't tied to React's
+  // component lifecycle on its own.
+  useEffect(() => {
+    return () => stopAllSpeaking();
+  }, []);
 
   // Prematch countdown for random-mode matches (created with
   // status='pending' precisely so this has something to show before

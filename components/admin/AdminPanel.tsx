@@ -54,10 +54,37 @@ async function persistSortOrder(table: "debots" | "topics" | "store_items" | "st
 // debot from the admin panel works without a schema migration. If you'd
 // rather fix this at the DB level instead, see the README's "Fixing the
 // debots.id default" note for the SQL to add a proper identity default.
-async function withNextDebotId(payload: Record<string, any>) {
+async function nextDebotId(): Promise<number> {
   const { data } = await supabase.from("debots").select("id").order("id", { ascending: false }).limit(1);
-  const nextId = (data && data[0]?.id ? Number(data[0].id) : 0) + 1;
-  return { ...payload, id: nextId };
+  return (data && data[0]?.id ? Number(data[0].id) : 0) + 1;
+}
+
+// Read-then-insert (see nextDebotId above) has an inherent race: two admins
+// creating a debot within the same moment can both read the same "current
+// max id" and then both try to insert that same id+1, and the second
+// insert fails on the table's primary-key/unique constraint. Rather than
+// surface that as an opaque failure, retry a few times against a freshly
+// re-read id — each retry re-reads the *new* max (which now includes
+// whichever insert won the previous attempt), so this converges instead of
+// repeating the same collision. This narrows the race to "as unlikely as
+// two admins submitting within the same query round-trip", not zero — a
+// real DB-level identity column (see the README note above) is still the
+// only way to eliminate it entirely, since only Postgres itself can
+// guarantee a truly atomic "next value".
+async function insertDebotWithRetry(payload: Record<string, any>, attempts = 3) {
+  let lastError: any = null;
+  for (let i = 0; i < attempts; i++) {
+    const id = await nextDebotId();
+    const res = await supabase.from("debots").insert({ ...payload, id }).select().single();
+    if (!res.error) return res;
+    lastError = res.error;
+    // 23505 = Postgres unique_violation — the only case worth retrying;
+    // anything else (bad payload, RLS denial, etc.) would fail identically
+    // on a retry, so surface it immediately instead of masking it behind
+    // three pointless extra round-trips.
+    if (res.error.code !== "23505") return res;
+  }
+  return { data: null, error: lastError };
 }
 
 // Hold-and-drag reordering via Pointer Events rather than native HTML5
@@ -322,7 +349,7 @@ function DebotsAdmin() {
 
     const res = editing.id
       ? await supabase.from("debots").update(payload).eq("id", editing.id).select()
-      : await supabase.from("debots").insert(await withNextDebotId(payload)).select().single();
+      : await insertDebotWithRetry(payload);
 
     if (res.error) {
       setStatus(`Failed: ${res.error.message}`);

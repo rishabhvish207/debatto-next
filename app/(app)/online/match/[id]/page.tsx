@@ -5,13 +5,17 @@
 // but scores each argument the INSTANT it's submitted (not waiting for
 // both sides of a round), matching how debot mode gives you a result the
 // moment you submit rather than waiting on anything else. See
-// lib/onlineArena.ts's scorePvpTurn for the per-turn judge call.
+// app/api/online/score-turn/route.ts (via lib/onlineArena.ts's
+// submitPvpTurn) for where the judge call + the write into
+// online_match_rounds actually happen now — both server-side, so this
+// client only ever sends raw argument text and reflects back whatever the
+// server decided, rather than computing/persisting the score itself.
 //
 // Whoever submits an argument scores their OWN turn — there's no longer a
 // "only player_a's client scores" rule (that was a source of fragility:
-// if player_a's browser wasn't around, nothing ever got scored). Both
-// clients also call finalizeMatchIfComplete defensively after every turn;
-// it's a no-op unless the match is actually fully scored.
+// if player_a's browser wasn't around, nothing ever got scored). The
+// server also finalizes the match (apply_match_completion) as part of
+// handling that same request, once all rounds are fully scored.
 //
 // Realtime (postgres_changes) is the primary sync mechanism, backed by a
 // light poll every few seconds as a safety net — belt and suspenders,
@@ -22,7 +26,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
-import { scorePvpTurn, turnImpact, finalizeMatchIfComplete } from "@/lib/onlineArena";
+import { submitPvpTurn, turnImpact } from "@/lib/onlineArena";
 import { callAI, extractJSON } from "@/lib/ai";
 import { PlayerSprite } from "@/components/ui/PlayerSprite";
 import { HPBar } from "@/components/ui/HPBar";
@@ -280,9 +284,6 @@ export default function OnlineMatchPage() {
   if (loading) return <div style={{ padding: 24, color: "var(--muted)" }}>Loading…</div>;
   if (!match) return <div style={{ padding: 24, color: "var(--muted)" }}>Match not found.</div>;
 
-  const myKey = iAmA ? "player_a_argument" : "player_b_argument";
-  const myGainKey = iAmA ? "player_a_gain" : "player_b_gain";
-  const myPenaltyKey = iAmA ? "player_a_penalty" : "player_b_penalty";
   const nextRoundNumber = rounds.length + 1;
   const oppId = iAmA ? match.player_b : match.player_a;
   const me = profiles[user?.id || ""];
@@ -402,30 +403,24 @@ export default function OnlineMatchPage() {
     setShowAce(false);
     setAceError("");
 
-    // Whatever the OTHER side most recently said is already computed above
-    // as precedingOpponentArg.
-    const score = await scorePvpTurn(match.topic_text, mySide, text, precedingOpponentArg, Math.min(nextRoundNumber, match.rounds_total), match.rounds_total);
-    const impact = turnImpact(Math.max(0, score.gain - score.penalty));
-    const fallacyKey = myKey === "player_a_argument" ? "a" : "b";
-    const tagsKey = myKey === "player_a_argument" ? "a_tags" : "b_tags";
-
-    if (!activeRound) {
-      const { error } = await supabase.from("online_match_rounds").insert({
-        match_id: match.id, round_number: nextRoundNumber, [firstArgKey]: text,
-        [myGainKey]: score.gain, [myPenaltyKey]: score.penalty, impact,
-        fallacies: { [fallacyKey]: score.fallacies, [tagsKey]: score.tags },
-      });
-      if (error) console.error(error);
-    } else {
-      const existingFallacies = activeRound.fallacies || {};
-      const { error } = await supabase.from("online_match_rounds").update({
-        [myKey]: text, [myGainKey]: score.gain, [myPenaltyKey]: score.penalty, impact,
-        fallacies: { ...existingFallacies, [fallacyKey]: score.fallacies, [tagsKey]: score.tags },
-      }).eq("id", activeRound.id);
-      if (error) console.error(error);
+    // Judging AND persisting the round now both happen server-side in
+    // app/api/online/score-turn — this client only sends the raw argument
+    // text and reflects back whatever the server decided. See
+    // lib/onlineArena.ts / that route's file comment for why: it used to
+    // be this component that called the AI judge and wrote gain/penalty
+    // straight into online_match_rounds itself, which meant nothing but
+    // RLS ownership checks stood between a player and self-awarding any
+    // score they wanted. Realtime (subscribed above) picks up the DB
+    // change the server made and calls loadAll() to refresh `rounds`, so
+    // there's nothing else for this function to write locally on success.
+    try {
+      await submitPvpTurn(match.id, text);
+    } catch (e: any) {
+      console.error(e);
+      setInput(text); // hand the text back so nothing typed gets lost on a rejected/failed submit
+      setItemToast(e?.message || "Failed to submit — please try again.");
+      setTimeout(() => setItemToast(""), 3500);
     }
-
-    await finalizeMatchIfComplete(match.id);
     setSubmitting(false);
   }
 

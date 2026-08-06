@@ -76,6 +76,12 @@ type GameContextValue = {
 
   profile: Profile;
   upProfile: (patch: Partial<Profile>) => void;
+  // Re-reads the logged-in profile row from Supabase into local state
+  // WITHOUT writing anything back — for the rare case something else
+  // (a server route, e.g. app/api/daily-challenge/submit crediting a
+  // reward) has already updated the DB row directly and local state just
+  // needs to catch up. No-op for guests (nothing in Supabase to read).
+  refetchProfile: () => Promise<void>;
   earnCoins: (amount: number, extra?: Partial<Profile>) => void;
   spendCoins: (amount: number, extra?: Partial<Profile>) => void;
   uploadAvatar: (file: File) => Promise<{ ok: boolean; error?: string }>;
@@ -1301,6 +1307,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         signOut,
         profile,
         upProfile,
+        refetchProfile: () => (user ? fetchProfile(user.id) : Promise.resolve()),
         earnCoins,
         spendCoins,
         uploadAvatar,

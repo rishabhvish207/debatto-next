@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { AI_CONFIG } from "@/config/AI";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
 
 // Plain server-side client (not the browser SSR wrapper in utils/supabase) —
 // this route never needs cookies/session, just a public anon-key read.
@@ -66,6 +67,14 @@ async function callGroq(model: string, system: string, userMsg: string, maxToken
 
 export async function POST(req: Request) {
   try {
+    // This route spends real Groq quota on every call and has no other
+    // auth gate in front of it, so it needs its own throttle — otherwise
+    // anyone who finds the endpoint can script requests against it for
+    // free. 20 requests/minute per IP comfortably covers a real debate
+    // (judge call + opponent reply per round) with room to spare.
+    const rl = checkRateLimit(req, "debate", { limit: 20, windowMs: 60_000 });
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterSeconds);
+
     // Only the actual conversational content comes from the client. Model,
     // token limit, and temperature are resolved server-side from
     // app_settings — admin-adjustable via AdminPanel, but never trusted

@@ -8,11 +8,18 @@
 // separate enabled lists (debots / players).
 export const runtime = "nodejs";
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { MsEdgeTTS } from "msedge-tts";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    // This just lists voices (no per-call cost beyond hitting the
+    // upstream unofficial API), but it's still worth capping so it can't
+    // be hammered as a side effect of abusing /api/tts.
+    const rl = checkRateLimit(req, "tts-voices", { limit: 20, windowMs: 60_000 });
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterSeconds);
+
     const tts = new MsEdgeTTS();
     const voices = await tts.getVoices();
     const filtered = voices

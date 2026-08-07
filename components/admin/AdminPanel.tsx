@@ -185,13 +185,18 @@ const ADMIN_SECTIONS = [
   },
 ] as const;
 
+const ADMIN_TAB_LABELS: Record<string, string> = {
+  debots: "Debots", topics: "Topics", store: "Store", achievements: "Achievements", learning: "Learning",
+  settings: "Settings", ai: "AI", online: "Online", voices: "Voices",
+};
+
 export function AdminPanel({ profile }: AdminPanelProps) {
   const [tab, setTab] = useState<"debots" | "topics" | "store" | "achievements" | "learning" | "settings" | "ai" | "online" | "voices">("debots");
 
   // Fail closed: no profile, or not an admin -> render nothing at all.
   if (!profile?.is_admin) return null;
 
-  const activeLabel = ADMIN_SECTIONS.flatMap((s) => s.tabs).find(([t]) => t === tab)?.[1];
+  const activeLabel = ADMIN_TAB_LABELS[tab];
 
   return (
     <div className="card" style={{ padding: 0, marginTop: 24, borderColor: "var(--amber)", overflow: "hidden" }}>

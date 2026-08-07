@@ -773,7 +773,7 @@ export default function OnlineMatchPage() {
       {turns.length > 1 && (
         <div>
           <button className="btn btn-ghost btn-sm" onClick={() => setShowHistory((v) => !v)} style={{ marginBottom: showHistory ? 8 : 0 }}>
-            {showHistory ? "Hide" : "Show"} round history ({turns.length - 1})
+            {showHistory ? "Hide" : "Show"} history ({turns.length - 1})
           </button>
           {showHistory && (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

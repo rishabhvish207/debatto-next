@@ -70,7 +70,15 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
   const [hoveredId, setHoveredId] = useState<any>(null); // cosmetic hover glow only
   const [viewedId, setViewedId] = useState<any>(null);   // which debot the panel is showing
 
-  const focusId = selectedOpp?.id ?? viewedId;
+  // Detail panel always follows whatever card was most recently clicked
+  // (`viewedId`), falling back to the selected debot only before the
+  // player has clicked anything yet. Previously this was the other way
+  // around (`selectedOpp?.id ?? viewedId`), so once a debot was selected,
+  // `focusId` permanently resolved to it — clicking any OTHER card still
+  // set `viewedId`, but that value was ignored while a selection existed,
+  // so the panel looked "stuck" on the selected debot until it was
+  // deselected first.
+  const focusId = viewedId ?? selectedOpp?.id;
   const focus = opps.find((o: any) => o.id === focusId) || null;
   const focusHex = focus ? (focus.color || "#6b9fff") : null;
 
@@ -78,6 +86,14 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
   // detail panel below. It never selects and never purchases by itself.
   function handleCardClick(o: any) {
     setViewedId(o.id);
+  }
+
+  // Double-tap/double-click a card to select it directly (unlocked debots
+  // only — a locked one still just brings up its panel so the player can
+  // see what it costs and unlock it from there).
+  function handleCardDoubleClick(o: any) {
+    setViewedId(o.id);
+    if (o.unlocked) onSelect(selectedOpp?.id === o.id ? null : o);
   }
 
   return (
@@ -124,6 +140,7 @@ export function DebotStage({ opps, selectedOpp, onSelect, onUnlock, profile }: a
                 opacity: o.unlocked ? 1 : 0.55,
               }}
               onClick={() => handleCardClick(o)}
+              onDoubleClick={() => handleCardDoubleClick(o)}
               onMouseEnter={() => setHoveredId(o.id)}
               onMouseLeave={() => setHoveredId(null)}
             >

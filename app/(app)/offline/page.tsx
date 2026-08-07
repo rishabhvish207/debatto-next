@@ -297,15 +297,64 @@ export default function OfflinePage() {
 
     try {
       const n = opp.argSentences ?? 3;
+      // The opening used to be pure flavor text — generated, shown, and
+      // never fed to the judge, so the debot effectively got one free
+      // unscored hit before the match "really" started (every other line
+      // it says gets graded as part of the following round's judge call).
+      // That's inconsistent and, from the player's side, makes an
+      // aggressive opening feel like it should have cost them something
+      // and didn't. Fixed by asking for the same gain/penalty self-report
+      // the judge already asks for on every subsequent opponent reply
+      // (see `opponent_gain`/`opponent_penalty` in submitArg below), using
+      // the exact same scale, so the opening is held to the same standard
+      // as every later round rather than getting a free pass.
       const sys = `You are ${opp.name} debating ${oppSide} the proposition: "${activeTopic.text}". 
 Personality: ${opp.personality} | Argument Depth: ${opp.depth}
 BACKGROUND STORY: ${opp.story}
 ${getDifficultyGuidance(opp.diff)}
-BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not every time) let a line of your argument be colored by your background story — a hint of your past, your present situation, or what you're working toward — without turning the debate into a monologue about yourself. Give a sharp ${n}-sentence opening argument in-character. Return ONLY the argument text.`;
-      
-      const text = await callAI(sys, "State your opening argument.");
+BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not every time) let a line of your argument be colored by your background story — a hint of your past, your present situation, or what you're working toward — without turning the debate into a monologue about yourself. Give a sharp ${n}-sentence opening argument in-character.
+
+Also self-evaluate the strength of your OWN opening the same way a debate judge would grade it: 0-${judgeSettings.maxOppGain} points for how compelling/well-supported it is, 0-${judgeSettings.maxOppPenalty} points deducted for any weak reasoning or fallacies in it. Be honest, not maximally self-flattering — a merely serviceable opener should score modestly, not near the cap.
+
+Return ONLY this JSON, no other text:
+{"argument": "your opening argument", "gain": <number 0-${judgeSettings.maxOppGain}>, "penalty": <number 0-${judgeSettings.maxOppPenalty}>}`;
+
+      const raw = await callAI(sys, "State your opening argument and self-evaluate it.");
+      let openingGain = 0, openingPenalty = 0, text = "";
+      try {
+        const parsed = JSON.parse(extractJSON(raw));
+        text = String(parsed.argument || "").trim();
+        openingGain = clamp(parsed.gain || 0, 0, judgeSettings.maxOppGain);
+        openingPenalty = clamp(parsed.penalty || 0, 0, judgeSettings.maxOppPenalty);
+      } catch (parseErr) {
+        // If the model doesn't return clean JSON, fall back to treating
+        // the raw text as the argument with no score — a missed opening
+        // hit is a much smaller problem than showing the player a chunk
+        // of stray JSON as their opponent's opening line.
+        console.error("Opening argument response wasn't valid JSON:", parseErr);
+        text = raw.trim();
+      }
+      if (!text) text = "…"; // last-ditch fallback so the UI never shows a blank line
+
       setOppArg(text);
       setEmotion("confident");
+
+      const openingNet = Math.max(0, openingGain - openingPenalty);
+      if (openingNet > 0) {
+        const oppDmgMultiplier = opp.multiplier ?? judgeSettings.opponentDamageMultiplier;
+        const dmg = Math.floor(openingNet * oppDmgMultiplier);
+        const newPHP = Math.max(0, 100 - dmg);
+        setPHP(newPHP);
+        setOPts(x => x + openingNet);
+        // Brief, visible-but-not-intrusive feedback that the opening
+        // actually did something, shown in the same loading caption the
+        // player just saw "Preparing opening argument…" in — no new UI
+        // needed, and it reads naturally as a continuation of that beat.
+        setLoadMsg(`${opp.name}'s opening lands — you take ${dmg} damage.`);
+        await new Promise(r => setTimeout(r, 1100));
+        if (dmg > 10) shakeEl("player", openingNet);
+      }
+
       setPhase("player-turn");
     } catch (err) {
       console.error(err);
@@ -957,7 +1006,7 @@ BEHAVIOR RULES: Speak like a real human. Show personality. Occasionally (not eve
         {history.length > 0 && (
           <div style={{ marginTop: 12 }}>
             <button className="btn btn-ghost btn-sm" onClick={() => setShowRoundHistory((v) => !v)} style={{ marginBottom: showRoundHistory ? 8 : 0 }}>
-              {showRoundHistory ? "Hide" : "Show"} round history ({history.length})
+              {showRoundHistory ? "Hide" : "Show"} history ({history.length})
             </button>
             {showRoundHistory && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

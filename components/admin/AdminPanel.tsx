@@ -220,7 +220,7 @@ export function AdminPanel({ profile }: AdminPanelProps) {
               {section.heading}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(78px, 1fr))", gap: 6 }}>
-              {section.tabs.map(([t, label, Icon]: [string, string, LucideIcon]) => {
+              {section.tabs.map(([t, label, Icon]: readonly [string, string, LucideIcon]) => {
                 const active = tab === t;
                 return (
                   <button

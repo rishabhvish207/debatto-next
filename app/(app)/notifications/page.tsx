@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useGame } from "@/contexts/GameContext";
 import { createClient } from "@/utils/supabase/client";
 import { expireStaleInvites, finalizeInviteIntoMatch, respondToInvite, type MatchInvite } from "@/lib/matchInvites";
+import { hasCompletedToday } from "@/lib/dailyChallengeStatus";
 
 const supabase = createClient();
 
@@ -29,6 +30,13 @@ export default function NotificationsPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
+  const [dailyDone, setDailyDone] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    hasCompletedToday(user).then((done) => { if (!cancelled) setDailyDone(done); });
+    return () => { cancelled = true; };
+  }, [user]);
 
   async function refresh() {
     if (!user) { setLoading(false); return; }
@@ -129,23 +137,32 @@ export default function NotificationsPage() {
     }
   }
 
-  if (!user) {
-    return <div style={{ padding: 24, color: "var(--muted)", textAlign: "center" }}>Log in to see your notifications.</div>;
-  }
-
-  const isEmpty = !loading && friendRequests.length === 0 && incoming.length === 0 && outgoing.length === 0;
+  const isEmpty = !loading && dailyDone !== false && friendRequests.length === 0 && incoming.length === 0 && outgoing.length === 0;
 
   return (
     <div className="root" style={{ padding: "20px 16px", maxWidth: 640, margin: "0 auto" }}>
       <h2 className="heading" style={{ fontSize: 22, marginBottom: 16 }}>Notifications</h2>
       {actionError && <div style={{ fontSize: 12, color: "var(--red)", marginBottom: 12 }}>{actionError}</div>}
 
-      {loading ? (
+      {loading && dailyDone === null ? (
         <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>
       ) : isEmpty ? (
         <div style={{ fontSize: 13, color: "var(--muted)" }}>Nothing here right now.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {dailyDone === false && (
+            <Section title="Daily Challenge">
+              <div className="card" style={{ padding: 12, display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1, fontSize: 13 }}>Today's Daily Challenge isn't done yet</div>
+                <button className="btn btn-primary btn-sm" onClick={() => router.push("/learning")}>Go</button>
+              </div>
+            </Section>
+          )}
+
+          {!user && (
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>Log in to also see friend requests and match invites here.</div>
+          )}
+
           {friendRequests.length > 0 && (
             <Section title="Friend requests">
               {friendRequests.map((r) => (

@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { DailyChallengeQuestion, DEFAULT_REWARD_PER_CORRECT } from "@/config/DailyChallenge";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
 
 // See app/api/daily-challenge/route.ts for why these are created lazily
 // inside the handler rather than at module load time.
@@ -24,8 +25,14 @@ async function getRewardPerCorrect(): Promise<number> {
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
+    // Grading calls the Groq-priced daily_challenges row (cheap — cached
+    // per day) but also does a real DB write; still worth capping against
+    // a scripted hammer, same as the sibling routes.
+    const rl = checkRateLimit(req, "daily-challenge-submit", { limit: 10, windowMs: 60_000 });
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterSeconds);
+
     const { challengeDate, answers } = await req.json();
     if (typeof challengeDate !== "string" || !Array.isArray(answers)) {
       return NextResponse.json({ error: "Malformed submission." }, { status: 400 });
@@ -89,6 +96,8 @@ export async function POST(req: Request) {
       is_correct: answers[i] === q.correctIndex,
     }));
 
+    let creditedServerSide = false;
+
     if (userId) {
       const { error: insertError } = await supabaseAdmin.from("daily_challenge_attempts").insert({
         user_id: userId,
@@ -108,9 +117,52 @@ export async function POST(req: Request) {
         console.error(insertError);
         return NextResponse.json({ error: "Failed to record your attempt." }, { status: 500 });
       }
+
+      // Credit the reward here, server-side, with the service-role key —
+      // rather than returning `score` and trusting the client to call
+      // updateProfile({ coins: ... }) afterward. That older flow meant the
+      // browser computed its own next balance and wrote it straight to
+      // `profiles` with only RLS row-ownership checking the request, i.e.
+      // nothing stopped a client from skipping the fetch entirely and
+      // just setting `coins` to whatever it wanted directly against the
+      // Supabase REST API. Only credit once the attempt row above is
+      // safely persisted (so a failure here never awards without a
+      // recorded attempt, and a retry after a crash can't double-credit —
+      // the unique constraint on daily_challenge_attempts already blocks
+      // a second insert for the same user/day).
+      if (score > 0) {
+        const { data: currentProfile, error: profileFetchError } = await supabaseAdmin
+          .from("profiles")
+          .select("coins, lifetime_debucks_earned")
+          .eq("id", userId)
+          .maybeSingle();
+
+        if (profileFetchError) {
+          console.error("Failed to read profile for daily challenge reward:", profileFetchError);
+        } else {
+          const nextCoins = (currentProfile?.coins ?? 0) + score;
+          const nextLifetimeEarned = (currentProfile?.lifetime_debucks_earned ?? 0) + score;
+          const { error: creditError } = await supabaseAdmin
+            .from("profiles")
+            .update({ coins: nextCoins, lifetime_debucks_earned: nextLifetimeEarned })
+            .eq("id", userId);
+          if (creditError) {
+            console.error("Failed to credit daily challenge reward:", creditError);
+          } else {
+            creditedServerSide = true;
+          }
+        }
+      } else {
+        creditedServerSide = true; // nothing to credit, so there's nothing for the client to do either
+      }
     }
 
-    return NextResponse.json({ correctCount, totalQuestions: questions.length, score, rewardPerCorrect, results, answers: answerDetail });
+    // `creditedServerSide` tells the client whether it still needs to
+    // apply `score` to the local/guest balance itself (guests, or the
+    // rare case the server-side credit above failed) — logged-in users
+    // whose coins were already credited here must NOT also call
+    // earnCoins() client-side, or they'd be paid twice.
+    return NextResponse.json({ correctCount, totalQuestions: questions.length, score, rewardPerCorrect, results, answers: answerDetail, creditedServerSide });
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

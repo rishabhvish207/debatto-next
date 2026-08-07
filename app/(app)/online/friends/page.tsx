@@ -430,7 +430,7 @@ function ChallengeSetup({ target, error, onCancel, onSend }: {
         )}
 
         <button className="btn btn-ghost btn-sm" onClick={() => setShowBrowse((v) => !v)} style={{ marginBottom: showBrowse ? 8 : 16 }}>
-          {showBrowse ? "Hide" : "Browse"} existing debot topics
+          {showBrowse ? "Hide" : "Browse"} topics
         </button>
         {showBrowse && (
           <div style={{ marginBottom: 16 }}>

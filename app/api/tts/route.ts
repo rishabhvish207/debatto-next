@@ -12,9 +12,15 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
 
 export async function POST(req: NextRequest) {
   try {
+    // No auth in front of this route either — cap it so it can't be used
+    // as a free, unlimited TTS proxy for arbitrary text.
+    const rl = checkRateLimit(req, "tts", { limit: 30, windowMs: 60_000 });
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterSeconds);
+
     const { text, voice } = await req.json();
     if (!text || typeof text !== "string") {
       return NextResponse.json({ error: "Missing text" }, { status: 400 });

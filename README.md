@@ -19,8 +19,8 @@ Built with Next.js (App Router), TypeScript, Tailwind, and Supabase (Postgres + 
 | **Admin** (`/admin`) | Playable (admin-only) — manage debots, topics, store items, themes, achievements, and game settings |
 | **Achievements** (`/achievements`) | Playable — admin-editable catalog (Admin → Achievements), auto-unlocked from match history + inventory, plus a manual-grant tool for one-off/cosmetic achievements |
 | **Learning** (`/learning`) | Playable — searchable/accordion Documentation (~40 entries across 5 categories), a daily 10-question MCQ Daily Challenge (server-graded, once per day), an AI Tutor chatbot, and a Game Guide |
-| **Online → Random** (`/online/random`) | Not built yet — schema ready (`matchmaking_queue`, `online_matches`, `online_match_rounds`, `try_match_player()` RPC) |
-| **Online → Friends** (`/online/friends`) | Not built yet — schema ready (`friendships` table) |
+| **Online → Random** (`/online/random`) | Playable — matchmaking queue, Realtime-synced live PvP arena, server-authoritative turn scoring (`app/api/online/score-turn`) |
+| **Online → Friends** (`/online/friends`) | Playable — invites, same live PvP arena as Random |
 
 ## Tech stack
 
@@ -49,7 +49,7 @@ GROQ_API_KEY=your-groq-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ```
 
-`GROQ_API_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are both server-only — never expose either with a `NEXT_PUBLIC_` prefix. `GROQ_API_KEY` is used in `app/api/debate/route.ts`. `SUPABASE_SERVICE_ROLE_KEY` (Supabase dashboard → Settings → API → service_role, marked secret) is used only by `app/api/daily-challenge/route.ts` and `app/api/daily-challenge/submit/route.ts` — it's the only way to guarantee the Daily Challenge's correct answers never reach the browser, since Supabase RLS can't hide a single column of a jsonb row from an otherwise-permitted SELECT; the underlying table just has no client-facing SELECT policy at all, and only a key that bypasses RLS entirely can read it.
+`GROQ_API_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are both server-only — never expose either with a `NEXT_PUBLIC_` prefix. `GROQ_API_KEY` is used in `app/api/debate/route.ts` and `app/api/online/score-turn/route.ts`. `SUPABASE_SERVICE_ROLE_KEY` (Supabase dashboard → Settings → API → service_role, marked secret) is used by `app/api/daily-challenge/route.ts`, `app/api/daily-challenge/submit/route.ts`, and `app/api/online/score-turn/route.ts` — for the Daily Challenge routes it's the only way to guarantee the correct answers never reach the browser (Supabase RLS can't hide a single column of a jsonb row from an otherwise-permitted SELECT, so the underlying table has no client-facing SELECT policy at all); for the online-match route it's what lets the server write the authoritative turn score to `online_match_rounds` regardless of that table's client-facing RLS policies (see "Locking down `online_match_rounds`" below).
 
 ## Database setup
 
@@ -199,7 +199,57 @@ create policy "Admins manage all achievement unlocks" on public.user_achievement
   using (public.is_admin()) with check (public.is_admin());
 ```
 
-### Achievements migration
+### Locking down `online_match_rounds` (required for the score-integrity fix)
+
+The live PvP arena (`/online/random`, `/online/friends`) used to have each player's own
+browser call the AI judge and then write the resulting `gain`/`penalty` straight into
+`online_match_rounds` with the ordinary anon-key client. That's now been moved server-side —
+see `app/api/online/score-turn/route.ts` — but the server-side fix only actually closes the
+hole if players can no longer write to that table directly. Run this to find and remove
+whatever policies currently let `player_a`/`player_b` `INSERT`/`UPDATE` the table themselves,
+then add back read access so the arena can still show live scores via Realtime/polling:
+
+```sql
+-- 1. See what's currently allowed. Look at the `cmd` column for any
+--    INSERT or UPDATE policy scoped to `authenticated` — those are what
+--    need to go. (SELECT policies are fine to keep; the client only ever
+--    needs to read this table now, never write it.)
+select policyname, cmd, roles, qual, with_check
+from pg_policies
+where schemaname = 'public' and tablename = 'online_match_rounds';
+
+-- 2. Drop whatever INSERT/UPDATE policies step 1 turned up. Names vary by
+--    how your project's schema was originally set up — replace these with
+--    whatever step 1 actually showed you if different from the defaults
+--    below:
+drop policy if exists "Players can insert their own match rounds" on public.online_match_rounds;
+drop policy if exists "Players can update their own match rounds" on public.online_match_rounds;
+
+-- 3. Make sure participants can still SELECT (needed for the Realtime
+--    subscription + safety-net poll the arena UI uses) — this is
+--    harmless to (re)create even if an equivalent policy already exists.
+drop policy if exists "Players can read their own match rounds" on public.online_match_rounds;
+create policy "Players can read their own match rounds" on public.online_match_rounds
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.online_matches m
+      where m.id = online_match_rounds.match_id
+        and (m.player_a = auth.uid() or m.player_b = auth.uid())
+    )
+  );
+
+-- No policy is needed for the server route itself — it uses
+-- SUPABASE_SERVICE_ROLE_KEY, which bypasses RLS entirely by design (same
+-- reasoning as the Daily Challenge tables below).
+```
+
+After this migration, the ONLY way `online_match_rounds` gets written to is through
+`/api/online/score-turn`, which validates match membership, turn order, and match status
+server-side before writing — a tampered client can no longer self-award score by hitting the
+Supabase REST API directly.
+
+
 
 Run once to create the catalog + per-user unlocks tables, add `used_item` to `matches` (needed for the "win without using an item" condition type), and seed the six starter achievements (matching `config/Achievements.ts` — also the reference to restore any by hand if deleted):
 
@@ -530,11 +580,14 @@ create unique index if not exists profiles_player_id_key on public.profiles (pla
 - **Debot difficulty (`diff`)** isn't just a label — `getDifficultyGuidance()` in `app/(app)/offline/page.tsx` turns it into concrete instructions injected into both the opening-argument and per-round judge prompts, so a "Beginner" debot genuinely argues weaker and gets graded more generously against, while "Expert" is the reverse.
 - **Damage multiplier (`debots.multiplier`)** scales *that debot's* attack against the player, if set; a debot with no explicit multiplier falls back to the game-wide `judge_opp_dmg_multiplier` (Admin → AI → Judge & Scoring). The player's damage to the opponent always uses the flat, game-wide `judge_player_dmg_multiplier` instead, since that shouldn't vary per-debot.
 - **Judge scoring** — the prompt, score caps, HP-damage multipliers, impact-label thresholds, and win bonuses are all admin-editable (Admin → AI → Judge & Scoring, backed by `app_settings`; see `config/Judge.ts` for the shipped defaults and an honest accounting of exactly how much of this is tunable vs structurally fixed in code). There's also a client-side backstop (`isLowEffortInput()`), toggleable from the same screen, independent of the AI's own judgment — when on, low-effort/gibberish input gets zero gain and max penalty locally regardless of what the model returned, since LLMs tend to grade generously by default.
+- **The debot's opening argument is scored too**, not just its replies to the player. It's generated and self-graded (gain/penalty on the same scale as every later round's `opponent_gain`/`opponent_penalty`) in one call at the start of `startBattle()` (`app/(app)/offline/page.tsx`), and the resulting damage lands on the player before their first turn, with a brief on-screen callout. Previously the opening was pure flavor text with zero score effect — every other line the debot ever says gets judged as part of the following round's judge call, so the opening not being graded at all was really an omission, not a deliberate "player gets a free round" design choice.
 - **Match reward** scales with rounds played: `opp.reward` is calibrated for `app_settings.rounds_default`, and the actual payout is `reward × (rounds played / default rounds)`, plus two conditional bonuses set in Admin → AI → Judge & Scoring: a no-penalty bonus (only if every round of the match scored 0 penalty) and a domination bonus (only if the final point margin clears an admin-set threshold).
 - **Store items** are bought with debucks in `/store` and consumed/used from `contexts/GameContext.tsx`, persisted through the `user_inventory` table (or `localStorage` for guests) — same dual-mode pattern as everything else. Insight Lens is a one-time permanent unlock (the in-match "Insight" lifeline becomes unlimited-use once owned); Ace Cards, Confidence Pills, and Revival Shots are stackable consumables capped at `maxStock`, each independently priced by one of four formulas an admin picks per item (Admin → Store → Items): flat, exponential (`base × multiplier^held`), linear (`multiplier × (held+1) × base`), or additive (`base + multiplier × held`) — all keyed off how many are *currently held*, not a running lifetime purchase count, so spending them back down brings the price back down too. Revival Shot heals to full HP rather than a fixed amount (`heal_full` on the item, distinct from Confidence Pill's numeric `heal_amount`). The item catalog is fixed to these four `key`s (`insight_lens`, `ace_card`, `confidence_pill`, `revival_shot`) — the only ones the in-match code actually checks — so Admin → Store → Items only tweaks their numbers now, it can't add or delete items. Ace Card specifically is only debited from inventory *after* its AI call succeeds — if Groq errors or rate-limits, the player keeps their card and can just try again.
 - **AI rate-limit fallback**: Groq's free tier caps tokens-per-day per model, not per account — `llama-3.3-70b-versatile` in particular has a much smaller daily budget than lighter models, so it's the one most likely to get rate-limited (HTTP 429) under real usage. `app/api/debate/route.ts` catches a 429 specifically and retries once against `ai_fallback_model` (default `llama-3.1-8b-instant`, editable in Admin → AI) before giving up — other error types (bad request, auth, etc.) aren't retried, since they'd fail identically on the fallback model too. Toggle off with `ai_fallback_enabled` if you'd rather it just fail loudly.
 - **Themes** change the whole app's look — colors, fonts, and (if set) a background image — the moment they're equipped, including the pre-login landing page (since `GameProvider` wraps the whole app from the root layout down, and the local/guest theme choice persists the same way as everything else). `config/Themes.ts` defines the CSS custom properties a theme can override (all 18 vars from `Debatto.css`, plus `--font-heading`/`--font-body`) and ships 3 starter themes as a fallback if `store_themes` is empty. Buying/equipping goes through `GameContext`'s `buyTheme`/`equipTheme`, same ownership pattern as debots (`user_themes` join table, or local storage for guests). Colors and fonts are applied globally by `components/shell/ThemeApplier.tsx`, mounted once in the root layout. Background image priority is handled per-surface: `app/(app)/layout.tsx` for the app shell, `components/shell/LandingThemeBg.tsx` for the landing page — if the equipped theme has its own background image, it overrides the site-wide background configured in Admin → Settings; if not, the site-wide background (if enabled) still shows through. The theme catalog is fully admin-editable (Admin → Store → Themes), including a live preview while editing.
 - **Settings flash prevention**: `roundOptions` starts empty (not a hardcoded fallback) and the Setup screen waits for `settingsLoaded` before rendering round-count buttons, so a stale default never flashes before the real admin-configured values arrive.
+- **Debot select screen**: `components/arena/DebotStage.tsx` shows a detail panel for whichever debot card was most recently tapped (`viewedId`), independent of which one is actually selected (`selectedOpp`) — so you can freely browse other debots' details without first deselecting the one you've picked. Double-tapping an unlocked card selects it directly, without needing to open its panel and hit the Select button. (Locked cards always just open their panel on any tap/double-tap — you still have to go through Unlock explicitly.)
+- **Notifications badge**: the header bell (`components/shell/TopBar.tsx`) polls `lib/notificationsBadge.ts` every 45s for a lightweight boolean — true if there's an incomplete Daily Challenge, a pending friend request, or an undismissed match invite (incoming or outgoing). This intentionally duplicates a little logic from `app/(app)/notifications/page.tsx` rather than sharing it outright, since the page needs the full joined objects (profile names, invite details, etc.) to render and the header only ever needs a yes/no. Nothing here is push/Realtime — it's poll-only, so a new notification can take up to ~45s to show the dot.
 
 ## Project structure
 
@@ -565,7 +618,7 @@ lib/                 # ai.ts (callAI), persistenceManager.ts (guest/local + Supa
 
 ### Fixing the debots.id default
 
-Unlike `store_items`/`store_themes`, the `debots` table's `id` column is a plain not-null integer with no auto-generating default — that's why creating a debot from the admin panel used to fail with `null value in column "id" violates not-null constraint`. The app now works around this by computing "one past the current highest id" client-side before inserting (see `withNextDebotId` in `AdminPanel.tsx`), so debot creation works without touching the database. If you'd rather fix it properly at the DB level instead:
+Unlike `store_items`/`store_themes`, the `debots` table's `id` column is a plain not-null integer with no auto-generating default — that's why creating a debot from the admin panel used to fail with `null value in column "id" violates not-null constraint`. The app now works around this by computing "one past the current highest id" client-side before inserting (see `nextDebotId`/`insertDebotWithRetry` in `AdminPanel.tsx`), retrying against a freshly-read id (up to 3 times) if two admins happen to create a debot at nearly the same moment and collide — so debot creation works without touching the database, and a rare simultaneous-create no longer needs a manual retry by the admin. That retry narrows the race, it doesn't eliminate it (only a real DB-level identity column can do that). If you'd rather fix it properly at the DB level instead:
 
 ```sql
 alter table public.debots alter column id add generated by default as identity;
@@ -577,5 +630,10 @@ select setval(pg_get_serial_sequence('public.debots', 'id'), (select max(id) fro
 ## Known limitations
 
 - Browser back-button interception mid-match isn't reliable (see architecture notes above) — use the in-app Exit button, drawer, or header logo instead, all of which are guarded.
-- Online multiplayer (both random matchmaking and challenging friends) and Learning are stubs — the underlying database schema is already in place for online, but there's no queue/matchmaking UI, Realtime subscription, or live two-human battle screen yet.
+- Learning's AI Tutor and Documentation/Game Guide content are admin-editable but the rest of Learning (Daily Challenge) is server-graded; see the Daily Challenge migration above for its schema.
 - Admin can add store items with any `key`, but only `insight_lens`, `ace_card`, and `confidence_pill` do anything in a match — a new key needs actual game-logic hooked up by a developer before it's more than cosmetic.
+- **Guest progress (coins, unlocked debots, match history, inventory) lives entirely in `localStorage`** — there's no server-side trust boundary for guests at all, by design (same as most single-player web games: nothing meaningful to protect until there's an account). Anyone using dev tools can edit their own guest state freely. This is expected and not something worth "fixing" for a guest.
+- **Logged-in economy (`profiles.coins`) is still writable directly by the client for most actions** (buying store items/themes, unlocking debots, offline debot-match rewards) via ordinary Supabase `.update()` calls, gated only by RLS row-ownership, not value validation. The Daily Challenge reward path was hardened to compute and persist server-side (see `app/api/daily-challenge/submit/route.ts`) precisely because it was the easiest one to exploit (an editable network response feeding straight into a client-side balance write) — the same class of issue technically still exists everywhere else `coins` is set via `upProfile`/`earnCoins`/`spendCoins`. Fully closing this for every economy action would mean moving every purchase/reward path server-side (or adding a Postgres trigger that rejects any client write to `coins`/`lifetime_debucks_earned`/`lifetime_debucks_spent` that isn't accompanied by a matching, validated ledger entry) — a larger follow-up than this pass covered, flagged here so it isn't mistaken for "already handled."
+- **PvP score integrity requires the RLS migration above to actually be applied.** The server-side scoring endpoint (`app/api/online/score-turn`) is necessary but not sufficient on its own — until `online_match_rounds`'s client-facing INSERT/UPDATE policies are dropped (see "Locking down `online_match_rounds`" above), a determined player can still bypass the app and write to that table directly via the Supabase REST API.
+- **Rate limiting on the API routes (`/api/debate`, `/api/tts`, `/api/daily-challenge`, `/api/online/score-turn`) is in-memory and per-process** (`lib/rateLimit.ts`) — it stops casual abuse of a single running instance, but on a multi-instance/serverless deploy each instance has its own counters, so a distributed script could still exceed the intended budget in aggregate. A shared store (Upstash Redis, etc.) would close that gap if this app sees real abuse traffic.
+- **Admin panel visual pass covered the shell, not every sub-section.** The outer nav (`AdminPanel.tsx`'s top-level tab grid) was redesigned into a grouped icon grid instead of a wrapping row of pill buttons, and the "Restore default" button was removed from Admin → Learning specifically (the one in Admin → AI → Judge & Scoring is a different, intentionally-kept feature). The individual sub-admin screens themselves (Debots, Topics, Store, etc. — most of this file's ~2700 lines) still use their original, denser form-heavy layout; a full visual pass on those would be a much larger, higher-risk follow-up.

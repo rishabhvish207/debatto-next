@@ -22,7 +22,7 @@ import { DEFAULT_JUDGE_SETTINGS } from "@/config/Judge";
 import { DEFAULT_DOCUMENTATION_MD, DEFAULT_GAME_GUIDE_MD } from "@/config/LearningDefaults";
 import { Markdown } from "@/components/ui/Markdown";
 import { AppIcon } from "@/components/ui/AppIcon";
-import { Settings, Sparkles } from "lucide-react";
+import { Settings, Sparkles, Swords, ScrollText, ShoppingBag, Trophy, BookOpen, SlidersHorizontal, Cpu, Globe2, Mic2, type LucideIcon } from "lucide-react";
 
 const supabase = createClient();
 
@@ -54,10 +54,37 @@ async function persistSortOrder(table: "debots" | "topics" | "store_items" | "st
 // debot from the admin panel works without a schema migration. If you'd
 // rather fix this at the DB level instead, see the README's "Fixing the
 // debots.id default" note for the SQL to add a proper identity default.
-async function withNextDebotId(payload: Record<string, any>) {
+async function nextDebotId(): Promise<number> {
   const { data } = await supabase.from("debots").select("id").order("id", { ascending: false }).limit(1);
-  const nextId = (data && data[0]?.id ? Number(data[0].id) : 0) + 1;
-  return { ...payload, id: nextId };
+  return (data && data[0]?.id ? Number(data[0].id) : 0) + 1;
+}
+
+// Read-then-insert (see nextDebotId above) has an inherent race: two admins
+// creating a debot within the same moment can both read the same "current
+// max id" and then both try to insert that same id+1, and the second
+// insert fails on the table's primary-key/unique constraint. Rather than
+// surface that as an opaque failure, retry a few times against a freshly
+// re-read id — each retry re-reads the *new* max (which now includes
+// whichever insert won the previous attempt), so this converges instead of
+// repeating the same collision. This narrows the race to "as unlikely as
+// two admins submitting within the same query round-trip", not zero — a
+// real DB-level identity column (see the README note above) is still the
+// only way to eliminate it entirely, since only Postgres itself can
+// guarantee a truly atomic "next value".
+async function insertDebotWithRetry(payload: Record<string, any>, attempts = 3) {
+  let lastError: any = null;
+  for (let i = 0; i < attempts; i++) {
+    const id = await nextDebotId();
+    const res = await supabase.from("debots").insert({ ...payload, id }).select().single();
+    if (!res.error) return res;
+    lastError = res.error;
+    // 23505 = Postgres unique_violation — the only case worth retrying;
+    // anything else (bad payload, RLS denial, etc.) would fail identically
+    // on a retry, so surface it immediately instead of masking it behind
+    // three pointless extra round-trips.
+    if (res.error.code !== "23505") return res;
+  }
+  return { data: null, error: lastError };
 }
 
 // Hold-and-drag reordering via Pointer Events rather than native HTML5
@@ -130,48 +157,105 @@ function useDragReorder(onCommit: (from: number, to: number) => void) {
   return { setRowRef, rowStyle, handleProps, dragging: dragIndex !== null };
 }
 
+// The 9 sub-admin sections, grouped the way an admin actually thinks about
+// them (what players see/get vs. how the game itself behaves) rather than
+// as one flat alphabetical row. Was previously a single `flexWrap: wrap`
+// row of plain pill buttons — fine at desktop width, but on a phone it
+// wrapped into a ragged 2-3-2-2 grid with no visual grouping, which read as
+// cluttered and made it hard to scan for a specific section.
+const ADMIN_SECTIONS = [
+  {
+    heading: "Content",
+    tabs: [
+      ["debots", "Debots", Swords],
+      ["topics", "Topics", ScrollText],
+      ["store", "Store", ShoppingBag],
+      ["achievements", "Achievements", Trophy],
+      ["learning", "Learning", BookOpen],
+    ],
+  },
+  {
+    heading: "System",
+    tabs: [
+      ["settings", "Settings", SlidersHorizontal],
+      ["ai", "AI", Cpu],
+      ["online", "Online", Globe2],
+      ["voices", "Voices", Mic2],
+    ],
+  },
+] as const;
+
+const ADMIN_TAB_LABELS: Record<string, string> = {
+  debots: "Debots", topics: "Topics", store: "Store", achievements: "Achievements", learning: "Learning",
+  settings: "Settings", ai: "AI", online: "Online", voices: "Voices",
+};
+
 export function AdminPanel({ profile }: AdminPanelProps) {
   const [tab, setTab] = useState<"debots" | "topics" | "store" | "achievements" | "learning" | "settings" | "ai" | "online" | "voices">("debots");
 
   // Fail closed: no profile, or not an admin -> render nothing at all.
   if (!profile?.is_admin) return null;
 
+  const activeLabel = ADMIN_TAB_LABELS[tab];
+
   return (
-    <div className="card" style={{ padding: 16, marginTop: 24, borderColor: "var(--amber)" }}>
-      <div style={{ fontSize: 11, color: "var(--amber)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10, display: "flex", alignItems: "center", gap: 5 }}>
+    <div className="card" style={{ padding: 0, marginTop: 24, borderColor: "var(--amber)", overflow: "hidden" }}>
+      <div style={{
+        padding: "14px 16px 4px",
+        display: "flex", alignItems: "center", gap: 7,
+        fontSize: 11, color: "var(--amber)", letterSpacing: "0.1em", textTransform: "uppercase",
+      }}>
         <Settings size={12} /> Admin
+        {activeLabel && (
+          <span style={{ color: "var(--muted)", letterSpacing: "normal", textTransform: "none", fontSize: 12 }}>
+            &nbsp;/ {activeLabel}
+          </span>
+        )}
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        {([
-          ["debots", "Debots"],
-          ["topics", "Topics"],
-          ["store", "Store"],
-          ["achievements", "Achievements"],
-          ["learning", "Learning"],
-          ["settings", "Settings"],
-          ["ai", "AI"],
-          ["online", "Online"],
-          ["voices", "Voices"],
-        ] as const).map(([t, label]) => (
-          <button
-            key={t}
-            className={`btn btn-sm ${tab === t ? "btn-primary" : "btn-ghost"}`}
-            onClick={() => setTab(t)}
-          >
-            {label}
-          </button>
+
+      <div style={{ padding: "10px 16px 14px", borderBottom: "1px solid var(--border)" }}>
+        {ADMIN_SECTIONS.map((section) => (
+          <div key={section.heading} style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 10, color: "var(--muted)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>
+              {section.heading}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(78px, 1fr))", gap: 6 }}>
+              {section.tabs.map(([t, label, Icon]: readonly [string, string, LucideIcon]) => {
+                const active = tab === t;
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setTab(t as typeof tab)}
+                    style={{
+                      display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                      padding: "9px 4px", borderRadius: 10, cursor: "pointer",
+                      border: active ? "1px solid var(--amber)" : "1px solid transparent",
+                      background: active ? "var(--amber-soft)" : "var(--faint)",
+                      color: active ? "var(--amber)" : "var(--muted)",
+                      transition: "background 0.12s, border-color 0.12s, color 0.12s",
+                    }}
+                  >
+                    <Icon size={17} strokeWidth={active ? 2.25 : 1.75} />
+                    <span style={{ fontSize: 10.5, fontWeight: active ? 600 : 500, lineHeight: 1.1, textAlign: "center" }}>{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         ))}
       </div>
 
-      {tab === "debots" && <DebotsAdmin />}
-      {tab === "topics" && <TopicsAdmin />}
-      {tab === "store" && <StoreAdmin />}
-      {tab === "achievements" && <AchievementsAdmin />}
-      {tab === "learning" && <LearningAdmin />}
-      {tab === "settings" && <SettingsAdmin />}
-      {tab === "ai" && <AiSettingsAdmin />}
-      {tab === "online" && <OnlineSettingsAdmin />}
-      {tab === "voices" && <VoicesAdmin />}
+      <div style={{ padding: 16 }}>
+        {tab === "debots" && <DebotsAdmin />}
+        {tab === "topics" && <TopicsAdmin />}
+        {tab === "store" && <StoreAdmin />}
+        {tab === "achievements" && <AchievementsAdmin />}
+        {tab === "learning" && <LearningAdmin />}
+        {tab === "settings" && <SettingsAdmin />}
+        {tab === "ai" && <AiSettingsAdmin />}
+        {tab === "online" && <OnlineSettingsAdmin />}
+        {tab === "voices" && <VoicesAdmin />}
+      </div>
     </div>
   );
 }
@@ -322,7 +406,7 @@ function DebotsAdmin() {
 
     const res = editing.id
       ? await supabase.from("debots").update(payload).eq("id", editing.id).select()
-      : await supabase.from("debots").insert(await withNextDebotId(payload)).select().single();
+      : await insertDebotWithRetry(payload);
 
     if (res.error) {
       setStatus(`Failed: ${res.error.message}`);
@@ -1725,11 +1809,6 @@ function LearningAdmin() {
     setStatus(error ? `Failed: ${error.message}` : "Saved — live on the Learning tab now.");
   }
 
-  function restoreDefault() {
-    setContent(which === "documentation" ? DEFAULT_DOCUMENTATION_MD : DEFAULT_GAME_GUIDE_MD);
-    setStatus("Reset to the shipped default — click Save to apply.");
-  }
-
   return (
     <div>
       <div style={{ display: "inline-flex", gap: 4, background: "var(--faint)", borderRadius: 999, padding: 3, marginBottom: 14 }}>
@@ -1757,7 +1836,6 @@ function LearningAdmin() {
             <label style={{ fontSize: 11, color: "var(--muted)" }}>Markdown</label>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn btn-ghost btn-sm" onClick={() => setPreview((p) => !p)}>{preview ? "Edit" : "Preview"}</button>
-              <button className="btn btn-ghost btn-sm" onClick={restoreDefault}>Restore default</button>
             </div>
           </div>
 

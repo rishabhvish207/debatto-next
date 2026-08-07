@@ -16,7 +16,7 @@ type SubmitResult = { correctCount: number; totalQuestions: number; score: numbe
 type Phase = "loading" | "intro" | "already-done" | "in-progress" | "submitting" | "results" | "error";
 
 export function DailyChallenge() {
-  const { user, earnCoins, checkAchievements, dailyChallengeRewardPerCorrect, setBattleActive, setNavGuardMessage, setNavGuardOnConfirm } = useGame();
+  const { user, earnCoins, refetchProfile, checkAchievements, dailyChallengeRewardPerCorrect, setBattleActive, setNavGuardMessage, setNavGuardOnConfirm } = useGame();
 
   const [phase, setPhase] = useState<Phase>("loading");
   const [challengeDate, setChallengeDate] = useState("");
@@ -129,7 +129,23 @@ export function DailyChallenge() {
       setResult(data);
       setPhase("results");
 
-      if (data.score > 0) earnCoins(data.score);
+      // For logged-in users, /api/daily-challenge/submit already credited
+      // `coins`/`lifetime_debucks_earned` server-side using its own DB
+      // read + the server-computed score — so the correct path here is to
+      // re-pull the (now-authoritative) profile row, not to independently
+      // recompute "current coins + score" from local state and write that
+      // back. Recomputing and writing locally would both double-apply the
+      // reward (this client's own state was already stale relative to the
+      // row the server just updated) and reopen the door to a tampered
+      // response simply overwriting the real balance with whatever number
+      // it wants. Guests have no server-side row at all, so they still go
+      // through the normal local earnCoins() path — same trust level as
+      // every other guest feature in this app.
+      if (data.creditedServerSide && user) {
+        refetchProfile().catch((e: any) => console.error("Failed to refresh profile after daily challenge reward:", e));
+      } else if (data.score > 0) {
+        earnCoins(data.score);
+      }
 
       // Tally total completions for the tiered "Daily Devotee" achievement —
       // logged-in count comes from a real row count (server already wrote

@@ -1,7 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { AI_CONFIG } from "@/config/AI";
 import { QUESTION_GEN_SYSTEM_PROMPT, FALLBACK_QUESTIONS, DailyChallengeQuestion } from "@/config/DailyChallenge";
+import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
 
 // This route (and submit/route.ts) uses the SERVICE ROLE key, not the anon
 // key like app/api/debate/route.ts does — on purpose. The whole point of
@@ -93,8 +94,15 @@ async function generateQuestions(): Promise<DailyChallengeQuestion[]> {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    // Cheap on cache hits (most of the day, once the day's row exists),
+    // but the very first request of a new UTC day triggers a Groq call —
+    // cap it so that path can't be abused to repeatedly trigger generation
+    // attempts (e.g. by racing right at day rollover).
+    const rl = checkRateLimit(req, "daily-challenge", { limit: 30, windowMs: 60_000 });
+    if (!rl.allowed) return rateLimitResponse(rl.retryAfterSeconds);
+
     const date = todayUTC();
     const supabaseAdmin = getAdminClient();
 

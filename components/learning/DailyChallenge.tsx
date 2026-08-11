@@ -61,24 +61,32 @@ export function DailyChallenge() {
   }
 
   async function checkAlreadyDone(date: string): Promise<boolean> {
+    // Local cache first, for everyone — see hasCompletedToday in
+    // lib/dailyChallengeStatus.ts for the full reasoning (short version:
+    // it's what actually keeps this screen showing "already done" on a
+    // refresh, instead of depending solely on a live DB read succeeding).
+    try {
+      const raw = localStorage.getItem(GUEST_TODAY_RESULT_PREFIX + date);
+      if (raw) { setResult(JSON.parse(raw)); return true; }
+    } catch {}
+
     if (user) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("daily_challenge_attempts")
         .select("score, correct_count, total_questions")
         .eq("user_id", user.id)
         .eq("challenge_date", date)
         .maybeSingle();
+      if (error) console.error("checkAlreadyDone: daily_challenge_attempts read failed:", error);
       if (data) {
-        setResult({ correctCount: data.correct_count, totalQuestions: data.total_questions, score: data.score, rewardPerCorrect: dailyChallengeRewardPerCorrect, results: [] });
+        const cached = { correctCount: data.correct_count, totalQuestions: data.total_questions, score: data.score, rewardPerCorrect: dailyChallengeRewardPerCorrect, results: [] };
+        setResult(cached);
+        // Backfill the local cache so the NEXT load on this browser hits
+        // the fast path above instead of needing the DB again.
+        try { localStorage.setItem(GUEST_TODAY_RESULT_PREFIX + date, JSON.stringify(cached)); } catch {}
         return true;
       }
-      return false;
     }
-    // Guest: check localStorage for today's date.
-    try {
-      const raw = localStorage.getItem(GUEST_TODAY_RESULT_PREFIX + date);
-      if (raw) { setResult(JSON.parse(raw)); return true; }
-    } catch {}
     return false;
   }
 
@@ -129,6 +137,14 @@ export function DailyChallenge() {
       setResult(data);
       setPhase("results");
 
+      // Cache the result locally for EVERYONE, not just guests — this is
+      // what checkAlreadyDone() (above) and hasCompletedToday() (used by
+      // the header's notification dot) both check first on the next load,
+      // instead of depending solely on a live DB read to notice "this
+      // user already submitted today." See those functions for why that
+      // live-read-only approach wasn't reliable enough on its own.
+      try { localStorage.setItem(GUEST_TODAY_RESULT_PREFIX + challengeDate, JSON.stringify(data)); } catch {}
+
       // For logged-in users, /api/daily-challenge/submit already credited
       // `coins`/`lifetime_debucks_earned` server-side using its own DB
       // read + the server-computed score — so the correct path here is to
@@ -166,7 +182,6 @@ export function DailyChallenge() {
           localStorage.setItem(GUEST_COMPLETIONS_KEY, JSON.stringify(dates));
           completedTotal = dates.length;
         } catch {}
-        try { localStorage.setItem(GUEST_TODAY_RESULT_PREFIX + challengeDate, JSON.stringify(data)); } catch {}
       }
 
       checkAchievements({ lifetimeEarnedDelta: data.score, dailyChallengesCompletedOverride: completedTotal }).catch(() => {});

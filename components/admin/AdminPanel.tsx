@@ -1377,21 +1377,6 @@ function ThemesAdmin() {
 // achievements, which never unlock on their own.
 // ===========================================================================
 
-const BLANK_ACHIEVEMENT = {
-  id: null as any,
-  key: "",
-  name: "",
-  icon: "🏅",
-  description: "",
-  condition_type: "total_wins" as AchievementConditionType,
-  condition_config: { count: 5 } as Record<string, any>,
-  reward_debucks: 10,
-  reward_theme_id: null as string | null,
-  active: true,
-  group_key: null as string | null,
-  tier: null as number | null,
-};
-
 function AchievementsAdmin() {
   const [sub, setSub] = useState<"catalog" | "grants">("catalog");
   return (
@@ -1443,7 +1428,6 @@ function AchievementsCatalogAdmin() {
   const reorder = useDragReorder(commitReorder);
 
   function startEdit(a: any) { setConfirmingDeleteId(null); setEditing({ ...a, condition_config: a.condition_config || {} }); }
-  function startNew() { setConfirmingDeleteId(null); setEditing({ ...BLANK_ACHIEVEMENT }); }
   function cancelEdit() { setEditing(null); }
   function updateField(key: string, value: any) { setEditing((prev: any) => ({ ...prev, [key]: value })); }
   function updateConfig(key: string, value: any) { setEditing((prev: any) => ({ ...prev, condition_config: { ...prev.condition_config, [key]: value } })); }
@@ -1627,7 +1611,6 @@ function AchievementsCatalogAdmin() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <span style={{ fontSize: 12, color: "var(--muted)" }}>{items.length} achievements</span>
-        <button className="btn btn-primary btn-sm" onClick={startNew}>+ New Achievement</button>
       </div>
       {loading ? (
         <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div>

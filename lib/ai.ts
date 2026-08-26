@@ -16,7 +16,13 @@ export async function callAI(system: string, userMsg: string) {
 // object. Shared between the debot judge (app/(app)/offline/page.tsx) and
 // the PvP judge (lib/onlineArena.ts) rather than each keeping its own copy.
 export function extractJSON(raw: string) {
-  const s = raw.trim().replace(/^```json\n?/, "").replace(/^```\n?/, "").replace(/\n?```$/, "").trim();
+  // Reasoning models (GPT-OSS, Qwen3) occasionally leak their internal
+  // reasoning into this same text even with reasoning_effort turned down
+  // (see lib/groqReasoning.ts) — when they do, it's most often wrapped in
+  // <think>...</think>, so strip that before hunting for the JSON object.
+  // Harmless no-op for any response that doesn't have one.
+  const noThink = raw.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const s = noThink.trim().replace(/^```json\n?/, "").replace(/^```\n?/, "").replace(/\n?```$/, "").trim();
   const a = s.indexOf("{"), b = s.lastIndexOf("}");
   return (a !== -1 && b !== -1) ? s.slice(a, b + 1) : s;
 }

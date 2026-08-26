@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { AI_CONFIG } from "@/config/AI";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
+import { reasoningModelExtras } from "@/lib/groqReasoning";
 
 // Plain server-side client (not the browser SSR wrapper in utils/supabase) —
 // this route never needs cookies/session, just a public anon-key read.
@@ -59,6 +60,7 @@ async function callGroq(model: string, system: string, userMsg: string, maxToken
       ],
       max_tokens: maxTokens,
       temperature,
+      ...reasoningModelExtras(model),
     }),
   });
   const data = await res.json();

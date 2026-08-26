@@ -5,6 +5,7 @@ import { fillTemplate } from "@/config/Judge";
 import { DEFAULT_PVP_TURN_JUDGE_SETTINGS } from "@/config/PvpJudge";
 import { isLowEffortInput } from "@/lib/ai";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
+import { reasoningModelExtras } from "@/lib/groqReasoning";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Server-authoritative PvP turn scoring.
@@ -75,6 +76,7 @@ async function callGroqJudge(system: string, userMsg: string, model: string, max
       ],
       max_tokens: maxTokens,
       temperature,
+      ...reasoningModelExtras(model),
     }),
   });
   const data = await res.json();
@@ -83,7 +85,11 @@ async function callGroqJudge(system: string, userMsg: string, model: string, max
 }
 
 function extractJSON(raw: string) {
-  const s = raw.trim().replace(/^```json\n?/, "").replace(/^```\n?/, "").replace(/\n?```$/, "").trim();
+  // See lib/ai.ts's extractJSON for why: reasoning models can leak
+  // internal reasoning wrapped in <think>...</think> even with
+  // reasoning_effort turned down.
+  const noThink = raw.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const s = noThink.trim().replace(/^```json\n?/, "").replace(/^```\n?/, "").replace(/\n?```$/, "").trim();
   const a = s.indexOf("{"), b = s.lastIndexOf("}");
   return a !== -1 && b !== -1 ? s.slice(a, b + 1) : s;
 }

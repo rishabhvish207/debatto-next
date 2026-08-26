@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { AI_CONFIG } from "@/config/AI";
 import { QUESTION_GEN_SYSTEM_PROMPT, FALLBACK_QUESTIONS, DailyChallengeQuestion } from "@/config/DailyChallenge";
 import { checkRateLimit, rateLimitResponse } from "@/lib/rateLimit";
+import { reasoningModelExtras } from "@/lib/groqReasoning";
 
 // This route (and submit/route.ts) uses the SERVICE ROLE key, not the anon
 // key like app/api/debate/route.ts does — on purpose. The whole point of
@@ -34,7 +35,11 @@ function todayUTC(): string {
 }
 
 function extractJSONArray(raw: string): string {
-  const s = raw.trim().replace(/^```json\n?/, "").replace(/^```\n?/, "").replace(/\n?```$/, "").trim();
+  // See lib/ai.ts's extractJSON for why: reasoning models can leak
+  // internal reasoning wrapped in <think>...</think> even with
+  // reasoning_effort turned down.
+  const noThink = raw.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  const s = noThink.trim().replace(/^```json\n?/, "").replace(/^```\n?/, "").replace(/\n?```$/, "").trim();
   const a = s.indexOf("["), b = s.lastIndexOf("]");
   return (a !== -1 && b !== -1) ? s.slice(a, b + 1) : s;
 }
@@ -79,6 +84,7 @@ async function generateQuestions(): Promise<DailyChallengeQuestion[]> {
         ],
         max_tokens: maxTokens,
         temperature,
+        ...reasoningModelExtras(model),
       }),
     });
     const data = await res.json();

@@ -2,7 +2,7 @@
 
 An AI-powered debate game. Pick a debot (an AI opponent with its own personality, difficulty, and argument style), pick a side of a topic, and go head-to-head across a set number of rounds. Each round, an LLM judges your argument, scores it, and fires back in character — HP and points move accordingly until one side wins.
 
-**Live demo:** [debatto-git-main-2-rishabhvish207s-projects.vercel.app](https://debatto-git-main-2-rishabhvish207s-projects.vercel.app/)
+**Live demo:** [https://debatto.vercel.app/](https://debatto.vercel.app/)
 
 Built with Next.js (App Router), TypeScript, Tailwind, and Supabase (Postgres + Auth + Storage). AI calls run through Groq (Llama 3.3 70B).
 
